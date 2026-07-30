@@ -3,49 +3,15 @@
 import { useState, useEffect } from "react";
 import {
   onAuthStateChanged,
-  signInWithCredential,
-  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signOut,
   browserLocalPersistence,
   setPersistence,
 } from "firebase/auth";
 import type { User } from "firebase/auth";
-import { auth, GOOGLE_CLIENT_ID } from "@/lib/firebase";
-
-declare global {
-  interface Window {
-    google?: {
-      accounts: {
-        oauth2: {
-          initTokenClient: (config: {
-            client_id: string;
-            scope: string;
-            callback: (response: {
-              access_token?: string;
-              error?: string;
-            }) => void;
-          }) => { requestAccessToken: () => void };
-        };
-      };
-    };
-  }
-}
-
-function loadGis(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (typeof window !== "undefined" && window.google?.accounts) {
-      resolve();
-      return;
-    }
-    const s = document.createElement("script");
-    s.src = "https://accounts.google.com/gsi/client";
-    s.async = true;
-    s.defer = true;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error("Failed to load GIS"));
-    document.head.appendChild(s);
-  });
-}
+import { auth, googleProvider } from "@/lib/firebase";
 
 export interface AuthState {
   user: User | null;
@@ -61,6 +27,12 @@ export function useAuth(): AuthState {
   useEffect(() => {
     setPersistence(auth, browserLocalPersistence).catch(() => {});
 
+    getRedirectResult(auth).catch((err) => {
+      if (err.code !== "auth/credential-already-in-use") {
+        console.warn("[auth] getRedirectResult", err.code);
+      }
+    });
+
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setLoading(false);
@@ -69,27 +41,16 @@ export function useAuth(): AuthState {
   }, []);
 
   async function signInWithGoogle() {
-    if (!GOOGLE_CLIENT_ID) {
-      console.error("[auth] Missing NEXT_PUBLIC_FIREBASE_WEB_CLIENT_ID");
-      return;
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (e: unknown) {
+      const err = e as { code?: string };
+      if (err.code === "auth/popup-blocked" || err.code === "auth/popup-closed-by-user") {
+        await signInWithRedirect(auth, googleProvider);
+      } else {
+        throw e;
+      }
     }
-
-    await loadGis();
-
-    const accessToken = await new Promise<string>((resolve, reject) => {
-      const client = window.google!.accounts.oauth2.initTokenClient({
-        client_id: GOOGLE_CLIENT_ID!,
-        scope: "profile email",
-        callback: (resp) => {
-          if (resp.error) reject(new Error(resp.error));
-          else resolve(resp.access_token!);
-        },
-      });
-      client.requestAccessToken();
-    });
-
-    const credential = GoogleAuthProvider.credential(null, accessToken);
-    await signInWithCredential(auth, credential);
   }
 
   async function logout() {

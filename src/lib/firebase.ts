@@ -12,8 +12,6 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-export const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_FIREBASE_WEB_CLIENT_ID;
-
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 export const db = getDatabase(app);
 export const auth = getAuth(app);
