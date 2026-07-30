@@ -1,6 +1,15 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import {
+  onAuthStateChanged,
+  signInAnonymously,
+  signOut,
+  browserLocalPersistence,
+  setPersistence,
+} from "firebase/auth";
+import type { User } from "firebase/auth";
+import { auth } from "@/lib/firebase";
 
 const EMAIL_KEY = "ridesTayoEmail";
 
@@ -18,12 +27,16 @@ export interface AuthState {
   logout: () => Promise<void>;
 }
 
-function emailToUser(email: string): AppUser {
-  return {
-    uid: email,
-    email,
-    displayName: email.split("@")[0],
-  };
+function getSavedEmail(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(EMAIL_KEY);
+}
+
+function buildUser(firebaseUser: User): AppUser | null {
+  const email = getSavedEmail();
+  return email
+    ? { uid: firebaseUser.uid, email, displayName: email.split("@")[0] }
+    : null;
 }
 
 export function useAuth(): AuthState {
@@ -31,11 +44,18 @@ export function useAuth(): AuthState {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(EMAIL_KEY);
-    if (saved) {
-      setUser(emailToUser(saved));
-    }
-    setLoading(false);
+    setPersistence(auth, browserLocalPersistence).catch(() => {});
+
+    const unsub = onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser) {
+        setUser(buildUser(firebaseUser));
+      } else {
+        setUser(null);
+      }
+      setLoading(false);
+    });
+
+    return unsub;
   }, []);
 
   const signInWithEmail = useCallback(async (email: string) => {
@@ -43,12 +63,21 @@ export function useAuth(): AuthState {
     if (!trimmed) {
       throw new Error("Please enter an email address.");
     }
+
     window.localStorage.setItem(EMAIL_KEY, trimmed);
-    setUser(emailToUser(trimmed));
+
+    /* onAuthStateChanged will pick up the existing session and build the user */
+    const fbUser = auth.currentUser;
+    if (fbUser) {
+      setUser(buildUser(fbUser));
+    } else {
+      await signInAnonymously(auth);
+    }
   }, []);
 
   async function logout() {
     window.localStorage.removeItem(EMAIL_KEY);
+    await signOut(auth);
     setUser(null);
   }
 
