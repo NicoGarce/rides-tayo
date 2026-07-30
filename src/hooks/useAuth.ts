@@ -1,7 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { onAuthStateChanged, signInWithRedirect, getRedirectResult, signOut } from "firebase/auth";
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+  browserLocalPersistence,
+  setPersistence,
+} from "firebase/auth";
 import type { User } from "firebase/auth";
 import { auth, googleProvider } from "@/lib/firebase";
 
@@ -17,12 +23,7 @@ export function useAuth(): AuthState {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getRedirectResult(auth).catch((err) => {
-      if (err.code !== "auth/credential-already-in-use") {
-        console.warn("[auth] getRedirectResult", err.code);
-      }
-    });
-
+    setPersistence(auth, browserLocalPersistence).catch(() => {});
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setLoading(false);
@@ -31,7 +32,7 @@ export function useAuth(): AuthState {
   }, []);
 
   async function signInWithGoogle() {
-    await signInWithRedirect(auth, googleProvider);
+    await signInWithPopup(auth, googleProvider);
   }
 
   async function logout() {
