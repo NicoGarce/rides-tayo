@@ -2,26 +2,44 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
+@layer base {
   :root {
     --background: #0a0a0a;
-    --foreground: #ededed;
+    --foreground: #fafafa;
+    --accent: #22c55e;
+    --accent-hover: #16a34a;
+    --muted: #a3a3a3;
+    --surface: #1a1a2e;
+    --border: #262626;
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  body {
+    color: var(--foreground);
+    background: var(--background);
+    font-family: system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
-}
-
 @layer utilities {
-  .text-balance {
-    text-wrap: balance;
+  .touch-target {
+    @apply min-h-[52px] min-w-[52px] flex items-center justify-center;
+  }
+
+  .btn-primary {
+    @apply touch-target w-full rounded-xl font-semibold text-lg
+           bg-[var(--accent)] text-[var(--background)]
+           active:bg-[var(--accent-hover)] transition-colors;
+  }
+
+  .btn-secondary {
+    @apply touch-target w-full rounded-xl font-semibold text-lg
+           bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)]
+           active:bg-[var(--border)] transition-colors;
   }
 }
