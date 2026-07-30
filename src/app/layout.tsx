@@ -1,14 +1,15 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Roam",
-  description: "Real-time voice chat for motorcycle rides.",
+  title: "Rides Tayo",
+  description: "Ride together, hear each other.",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Roam",
+    title: "Rides Tayo",
   },
   icons: [
     { rel: "icon", url: "/icon.svg", type: "image/svg+xml" },
@@ -31,28 +32,21 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <head>
-        {/* service worker registration (production only) */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
+      <body className="antialiased min-h-dvh flex flex-col">
+        <Script id="sw" strategy="afterInteractive">
+          {`
 if ('serviceWorker' in navigator) {
-  /* unregister any stale SW from previous sessions */
   navigator.serviceWorker.getRegistrations().then(function(regs) {
     regs.forEach(function(r) { r.unregister(); });
   });
-  /* only register for production — dev server has its own HMR */
   if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
     window.addEventListener('load', function() {
       navigator.serviceWorker.register('/sw.js');
     });
   }
 }
-            `.trim(),
-          }}
-        />
-      </head>
-      <body className="antialiased min-h-dvh flex flex-col">
+          `}
+        </Script>
         {children}
       </body>
     </html>

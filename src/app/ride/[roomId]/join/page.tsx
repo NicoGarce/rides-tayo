@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/hooks/useAuth";
 
 interface Props {
   params: { roomId: string };
@@ -9,14 +10,26 @@ interface Props {
 
 export default function JoinPage({ params }: Props) {
   const router = useRouter();
+  const { user, loading: authLoading } = useAuth();
   const [name, setName] = useState("");
   const [joining, setJoining] = useState(false);
 
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.replace("/");
+    }
+  }, [authLoading, user, router]);
+
+  useEffect(() => {
+    if (user?.displayName) {
+      setName(user.displayName);
+    }
+  }, [user]);
+
   async function handleJoin() {
-    const displayName = name.trim() || "Rider";
+    const displayName = name.trim() || user?.displayName || "Rider";
     setJoining(true);
 
-    /* request mic — show the browser prompt now so it's expected */
     try {
       const s = await navigator.mediaDevices.getUserMedia({ audio: true });
       s.getTracks().forEach((t) => t.stop());
@@ -24,7 +37,6 @@ export default function JoinPage({ params }: Props) {
       /* user will see the denied banner on the ride page */
     }
 
-    /* request location */
     try {
       await new Promise<void>((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(
@@ -41,6 +53,8 @@ export default function JoinPage({ params }: Props) {
     router.push(`/ride/${params.roomId}`);
   }
 
+  if (authLoading || !user) return null;
+
   return (
     <main className="flex flex-col min-h-dvh">
       <div className="flex-1 flex flex-col items-center justify-center gap-8 px-6 max-w-sm mx-auto w-full">
@@ -51,7 +65,6 @@ export default function JoinPage({ params }: Props) {
           </p>
         </div>
 
-        {/* display name */}
         <div className="w-full space-y-2">
           <label className="text-sm font-medium text-[var(--muted)]">
             Your name
@@ -69,11 +82,11 @@ export default function JoinPage({ params }: Props) {
         {/* iOS Safari warning */}
         <div className="w-full px-4 py-3 rounded-xl bg-yellow-900/40 border border-yellow-700 text-xs text-yellow-200 leading-relaxed">
           ⚠️ <strong>iOS Safari</strong> pauses mic, location, and audio
-          when the app is in the background. Keep Roam in the foreground
-          during a ride. Add it to your home screen for the best experience.
+          when the app is in the background. Keep Rides Tayo in the
+          foreground during a ride. Add it to your home screen for the
+          best experience.
         </div>
 
-        {/* permission explanations */}
         <div className="w-full space-y-3 text-sm">
           <div className="flex items-start gap-3 px-4 py-3 rounded-xl bg-[var(--surface)] border border-[var(--border)]">
             <span className="text-lg mt-0.5 shrink-0">🎤</span>
@@ -99,7 +112,6 @@ export default function JoinPage({ params }: Props) {
           </div>
         </div>
 
-        {/* join button */}
         <button
           onClick={handleJoin}
           disabled={joining}

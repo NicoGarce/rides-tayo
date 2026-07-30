@@ -26,7 +26,9 @@ import { useWakeLock } from "@/hooks/useWakeLock";
 
 interface UsePeerConnectionOptions {
   roomId: string;
+  riderId?: string;
   riderName?: string;
+  photoURL?: string;
 }
 
 export interface RemotePeer {
@@ -40,6 +42,7 @@ export interface RiderInfo {
   riderId: string;
   peerId: string;
   name: string;
+  photoURL?: string;
   lastSeen: number;
   location?: RiderData["location"];
 }
@@ -62,7 +65,9 @@ function generateRiderId(): string {
 
 export function usePeerConnection({
   roomId,
+  riderId: authRiderId,
   riderName = "Rider",
+  photoURL,
 }: UsePeerConnectionOptions) {
   const [remotePeers, setRemotePeers] = useState<RemotePeer[]>([]);
   const [callStatus, setCallStatus] = useState<CallStatus>("connecting");
@@ -70,13 +75,14 @@ export function usePeerConnection({
   const [riders, setRiders] = useState<RiderInfo[]>([]);
   const [micDenied, setMicDenied] = useState(false);
   const [locationDenied, setLocationDenied] = useState(false);
+  const [speakingPeerIds, setSpeakingPeerIds] = useState<Set<string>>(new Set());
 
   const peerRef = useRef<Peer | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const connectionsRef = useRef<Map<string, MediaConnection>>(new Map());
   const remoteStreamsRef = useRef<Map<string, MediaStream>>(new Map());
   const isDestroyedRef = useRef(false);
-  const riderIdRef = useRef(generateRiderId());
+  const riderIdRef = useRef(authRiderId || generateRiderId());
   const initialSetupDoneRef = useRef(false);
 
   const riderId = riderIdRef.current;
@@ -161,7 +167,6 @@ export function usePeerConnection({
   useEffect(() => {
     let cancelled = false;
     let unsubscribeRiders: (() => void) | null = null;
-    let watchPositionId: number | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     isDestroyedRef.current = false;
     initialSetupDoneRef.current = false;
@@ -196,10 +201,9 @@ export function usePeerConnection({
       peer.on("open", () => {
         if (cancelled) return;
 
-        /* if this is a reconnection, just refresh presence */
         if (initialSetupDoneRef.current) {
           try {
-            writePresence(roomId, riderId, { peerId, name: riderName });
+            writePresence(roomId, riderId, { peerId, name: riderName, photoURL });
           } catch {
             /* ignore */
           }
@@ -211,52 +215,9 @@ export function usePeerConnection({
 
         /* --- Firebase: write presence --- */
         try {
-          writePresence(roomId, riderId, { peerId, name: riderName });
+          writePresence(roomId, riderId, { peerId, name: riderName, photoURL });
         } catch (e) {
           console.warn("[firebase] writePresence failed", e);
-        }
-
-        /* --- geolocation watcher (accurate + throttled) --- */
-        const LAST_WRITE_MS = 2000;
-        const MOVE_THRESHOLD_M = 15;
-        let lastWrite = 0;
-        let lastLat = 0;
-        let lastLng = 0;
-        try {
-          watchPositionId = navigator.geolocation.watchPosition(
-            (pos) => {
-              if (cancelled) return;
-              const { latitude: lat, longitude: lng, heading } = pos.coords;
-              const now = Date.now();
-
-              /* throttle: skip if too soon AND less than threshold move */
-              const dt = now - lastWrite;
-              const moved =
-                haversine(lastLat, lastLng, lat, lng) > MOVE_THRESHOLD_M;
-              if (dt < LAST_WRITE_MS && !moved) return;
-
-              lastWrite = now;
-              lastLat = lat;
-              lastLng = lng;
-
-              try {
-                writeLocation(roomId, riderId, { lat, lng, heading });
-              } catch (e) {
-                console.warn("[firebase] writeLocation failed", e);
-              }
-            },
-            (err) => {
-              console.warn("[location]", err.message);
-              setLocationDenied(true);
-            },
-            {
-              enableHighAccuracy: true,
-              timeout: 5000,
-              maximumAge: 0,
-            }
-          );
-        } catch {
-          setLocationDenied(true);
         }
 
         /* --- Firebase: subscribe to all riders --- */
@@ -300,18 +261,13 @@ export function usePeerConnection({
 
       peer.on("disconnected", () => {
         if (cancelled || isDestroyedRef.current) return;
-
         setCallStatus("reconnecting");
-
-        /* attempt graceful reconnect */
         peer.reconnect();
 
-        /* if reconnect doesn't succeed within 15s, destroy + recreate */
         reconnectTimer = setTimeout(() => {
           if (cancelled || isDestroyedRef.current) return;
           console.warn("[peer] reconnect timed out — recreating peer");
           peer.destroy();
-          /* re-initialise by calling init() again */
           localStreamRef.current?.getTracks().forEach((t) => t.stop());
           localStreamRef.current = null;
           peerRef.current = null;
@@ -341,10 +297,6 @@ export function usePeerConnection({
       isDestroyedRef.current = true;
 
       if (reconnectTimer !== null) clearTimeout(reconnectTimer);
-
-      if (watchPositionId !== null) {
-        navigator.geolocation.clearWatch(watchPositionId);
-      }
 
       if (unsubscribeRiders) {
         unsubscribeRiders();
@@ -377,7 +329,123 @@ export function usePeerConnection({
         peerRef.current = null;
       }
     };
-  }, [roomId, peerId, callPeer, answerCall, syncRemotePeers, riderName, riderId]);
+  }, [roomId, peerId, callPeer, answerCall, syncRemotePeers, riderName, riderId, photoURL]);
+
+  /* ---- location watching (always on while in the ride) ---- */
+  useEffect(() => {
+    let cancelled = false;
+    let watchId: number | null = null;
+    let lastWrite = 0;
+    let lastLat = 0;
+    let lastLng = 0;
+    const LAST_WRITE_MS = 2000;
+    const MOVE_THRESHOLD_M = 15;
+
+    try {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          if (cancelled) return;
+          const { latitude: lat, longitude: lng, heading } = pos.coords;
+          const now = Date.now();
+
+          const dt = now - lastWrite;
+          const moved = haversine(lastLat, lastLng, lat, lng) > MOVE_THRESHOLD_M;
+          if (dt < LAST_WRITE_MS && !moved) return;
+
+          lastWrite = now;
+          lastLat = lat;
+          lastLng = lng;
+
+          try {
+            writeLocation(roomId, riderId, { lat, lng, heading });
+          } catch (e) {
+            console.warn("[firebase] writeLocation failed", e);
+          }
+        },
+        (err) => {
+          console.warn("[location]", err.message);
+          if (err.code === err.PERMISSION_DENIED) {
+            setLocationDenied(true);
+          }
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 5000,
+          maximumAge: 0,
+        }
+      );
+    } catch {
+      setLocationDenied(true);
+    }
+
+    return () => {
+      cancelled = true;
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+      try {
+        removeLocation(roomId, riderId);
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [roomId, riderId]);
+
+  /* ---- voice activity detection ---- */
+  useEffect(() => {
+    if (remotePeers.length === 0) return;
+
+    const ctx = new AudioContext();
+    const analysers = new Map<string, { src: MediaStreamAudioSourceNode; analyser: AnalyserNode }>();
+
+    for (const peer of remotePeers) {
+      try {
+        const src = ctx.createMediaStreamSource(peer.stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        src.connect(analyser);
+        analysers.set(peer.peerId, { src, analyser });
+      } catch {
+        /* stream may already be ended */
+      }
+    }
+
+    let rafId: number;
+    const buffer = new Uint8Array(128);
+    const THRESHOLD = 0.25;
+    const prev = new Set<string>();
+
+    function poll() {
+      const speaking = new Set<string>();
+      analysers.forEach(({ analyser }, id) => {
+        analyser.getByteFrequencyData(buffer);
+        const avg = buffer.reduce((a, b) => a + b, 0) / buffer.length;
+        if (avg / 255 > THRESHOLD) speaking.add(id);
+      });
+
+      let changed = speaking.size !== prev.size;
+      if (!changed) {
+        speaking.forEach((id) => {
+          if (!prev.has(id)) { changed = true; }
+        });
+      }
+      if (changed) {
+        prev.clear();
+        speaking.forEach((id) => prev.add(id));
+        setSpeakingPeerIds(speaking);
+      }
+
+      rafId = requestAnimationFrame(poll);
+    }
+
+    rafId = requestAnimationFrame(poll);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      analysers.forEach(({ src }) => src.disconnect());
+      ctx.close();
+    };
+  }, [remotePeers]);
 
   /* ---- mute / unmute ---- */
   const toggleMute = useCallback(() => {
@@ -402,5 +470,6 @@ export function usePeerConnection({
     micDenied,
     locationDenied,
     toggleMute,
+    speakingPeerIds,
   };
 }

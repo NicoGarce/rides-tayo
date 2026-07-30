@@ -1,6 +1,6 @@
-/* Roam — service worker */
+/* Rides Tayo — service worker */
 
-const CACHE = "roam-shell-v1";
+const CACHE = "rides-tayo-v2";
 const STATIC = ["/"];
 
 self.addEventListener("install", (event) => {
@@ -19,7 +19,6 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
-  /* stale-while-revalidate: serve cached, then update in background */
   event.respondWith(
     caches.open(CACHE).then((cache) =>
       cache.match(event.request).then((cached) => {

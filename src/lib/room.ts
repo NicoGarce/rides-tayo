@@ -42,6 +42,7 @@ export interface RiderLocation {
 export interface RiderData {
   peerId: string;
   name: string;
+  photoURL?: string;
   lastSeen: number;
   location?: RiderLocation;
 }
@@ -51,7 +52,7 @@ export interface RiderData {
 export function writePresence(
   roomId: string,
   riderId: string,
-  data: { peerId: string; name: string }
+  data: { peerId: string; name: string; photoURL?: string }
 ): void {
   const riderRef = ref(db, `rooms/${roomId}/riders/${riderId}`);
   set(riderRef, { ...data, lastSeen: Date.now() });
