@@ -1,69 +1,56 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import {
-  onAuthStateChanged,
-  sendSignInLinkToEmail,
-  isSignInWithEmailLink,
-  signInWithEmailLink,
-  signOut,
-  browserLocalPersistence,
-  setPersistence,
-} from "firebase/auth";
-import type { User } from "firebase/auth";
-import { auth } from "@/lib/firebase";
 
 const EMAIL_KEY = "ridesTayoEmail";
 
+export interface AppUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL?: string;
+}
+
 export interface AuthState {
-  user: User | null;
+  user: AppUser | null;
   loading: boolean;
-  sendOtp: (email: string) => Promise<void>;
+  signInWithEmail: (email: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
+function emailToUser(email: string): AppUser {
+  return {
+    uid: email,
+    email,
+    displayName: email.split("@")[0],
+  };
+}
+
 export function useAuth(): AuthState {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  /* handle email link sign-in on page load */
   useEffect(() => {
-    setPersistence(auth, browserLocalPersistence).catch(() => {});
-
-    if (typeof window !== "undefined" && isSignInWithEmailLink(auth, window.location.href)) {
-      const email = window.localStorage.getItem(EMAIL_KEY);
-      if (email) {
-        signInWithEmailLink(auth, email, window.location.href)
-          .then(() => {
-            window.localStorage.removeItem(EMAIL_KEY);
-            window.history.replaceState({}, "", window.location.pathname);
-          })
-          .catch((err) => {
-            console.warn("[auth] email link sign-in failed", err.code);
-            window.localStorage.removeItem(EMAIL_KEY);
-          });
-      }
+    const saved = window.localStorage.getItem(EMAIL_KEY);
+    if (saved) {
+      setUser(emailToUser(saved));
     }
-
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
-    });
-    return unsub;
+    setLoading(false);
   }, []);
 
-  const sendOtp = useCallback(async (email: string) => {
-    const actionCodeSettings = {
-      url: typeof window !== "undefined" ? window.location.href : "",
-      handleCodeInApp: true,
-    };
-    await sendSignInLinkToEmail(auth, email, actionCodeSettings);
-    window.localStorage.setItem(EMAIL_KEY, email);
+  const signInWithEmail = useCallback(async (email: string) => {
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed) {
+      throw new Error("Please enter an email address.");
+    }
+    window.localStorage.setItem(EMAIL_KEY, trimmed);
+    setUser(emailToUser(trimmed));
   }, []);
 
   async function logout() {
-    await signOut(auth);
+    window.localStorage.removeItem(EMAIL_KEY);
+    setUser(null);
   }
 
-  return { user, loading, sendOtp, logout };
+  return { user, loading, signInWithEmail, logout };
 }
