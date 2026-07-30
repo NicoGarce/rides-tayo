@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createRoom } from "@/lib/room";
 import { useAuth } from "@/hooks/useAuth";
@@ -15,7 +16,11 @@ function generateRoomId(): string {
 
 export default function Home() {
   const router = useRouter();
-  const { user, loading, signInWithGoogle } = useAuth();
+  const { user, loading, sendOtp } = useAuth();
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState("");
+  const [sending, setSending] = useState(false);
 
   async function handleCreate() {
     const roomId = generateRoomId();
@@ -25,6 +30,20 @@ export default function Home() {
       console.warn("[create] room creation failed, proceeding anyway", e);
     }
     router.push(`/ride/${roomId}/join`);
+  }
+
+  async function handleSendOtp() {
+    if (!email.trim()) return;
+    setSending(true);
+    setError("");
+    try {
+      await sendOtp(email.trim());
+      setSent(true);
+    } catch (e: unknown) {
+      setError((e as { message?: string }).message || "Failed to send OTP");
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
@@ -45,10 +64,36 @@ export default function Home() {
           <button onClick={handleCreate} className="btn-primary">
             Create Ride
           </button>
+        ) : sent ? (
+          <div className="text-center space-y-2">
+            <p className="text-sm text-[var(--muted)]">
+              Check your email for the sign-in link.
+            </p>
+            <p className="text-xs text-[var(--muted)]">
+              {email}
+            </p>
+          </div>
         ) : (
-          <button onClick={signInWithGoogle} className="btn-primary">
-            Sign in with Google
-          </button>
+          <div className="w-full flex flex-col gap-2">
+            <input
+              type="email"
+              placeholder="Enter your email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSendOtp()}
+              className="w-full px-4 py-3 rounded-xl bg-[var(--surface)] border border-[var(--border)] text-[var(--foreground)] placeholder-[var(--muted)] outline-none focus:border-[var(--accent)] transition-colors"
+            />
+            <button
+              onClick={handleSendOtp}
+              disabled={sending || !email.trim()}
+              className="btn-primary disabled:opacity-50"
+            >
+              {sending ? "Sending…" : "Send OTP"}
+            </button>
+            {error && (
+              <p className="text-xs text-red-400 text-center">{error}</p>
+            )}
+          </div>
         )}
       </div>
     </main>
