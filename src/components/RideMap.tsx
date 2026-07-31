@@ -12,8 +12,8 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { RiderInfo } from "@/hooks/usePeerConnection";
 
-/* marker icon — a coloured circle with a white border and heading arrow */
-function riderIcon(color: string, heading: number | null) {
+/* marker icon — a circle with the rider's initial, white border, and heading arrow */
+function riderIcon(color: string, heading: number | null, initial: string) {
   const arrow =
     heading !== null
       ? `<div style="
@@ -30,14 +30,16 @@ function riderIcon(color: string, heading: number | null) {
     html: `<div style="position:relative;display:flex;align-items:center;justify-content:center">
       ${arrow}
       <div style="
-        width:20px;height:20px;border-radius:50%;
+        width:24px;height:24px;border-radius:50%;
         background:${color};border:3px solid #fff;
         box-shadow:0 1px 4px rgba(0,0,0,.35);
-      "></div>
+        display:flex;align-items:center;justify-content:center;
+        font-size:12px;font-weight:700;color:#fff;line-height:1;
+      ">${initial}</div>
     </div>`,
-    iconSize: [26, 32],
-    iconAnchor: [13, 16],
-    popupAnchor: [0, -18],
+    iconSize: [30, 36],
+    iconAnchor: [15, 18],
+    popupAnchor: [0, -20],
   });
 }
 
@@ -73,11 +75,11 @@ export default function RideMap({ riders, myRiderId }: Props) {
   const withoutLocation = riders.filter((r) => !r.location);
 
   return (
-    <div className="w-full">
+    <div className="w-full h-full">
       <MapContainer
         center={[20, 0]}
         zoom={2}
-        className="h-64 w-full rounded-xl z-0"
+        className="h-full w-full rounded-xl z-0"
         scrollWheelZoom
       >
         <TileLayer
@@ -91,7 +93,8 @@ export default function RideMap({ riders, myRiderId }: Props) {
             position={[rider.location!.lat, rider.location!.lng]}
             icon={riderIcon(
               rider.riderId === myRiderId ? "#22c55e" : "#3b82f6",
-              rider.location!.heading
+              rider.location!.heading,
+              rider.name.charAt(0).toUpperCase()
             )}
           >
             <Popup>

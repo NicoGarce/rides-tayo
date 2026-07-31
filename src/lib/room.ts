@@ -1,21 +1,25 @@
 import {
-  ref,
+  ref as dbRef,
   set,
   remove,
   get,
+  push,
   onValue,
   off,
   onDisconnect,
+  query,
+  limitToLast,
+  orderByChild,
 } from "firebase/database";
 import { db } from "./firebase";
 
 export function createRoom(roomId: string): Promise<void> {
-  const roomRef = ref(db, `rooms/${roomId}`);
+  const roomRef = dbRef(db, `rooms/${roomId}`);
   return set(roomRef, { createdAt: Date.now() });
 }
 
 export async function roomExists(roomId: string): Promise<boolean> {
-  const snap = await get(ref(db, `rooms/${roomId}/createdAt`));
+  const snap = await get(dbRef(db, `rooms/${roomId}/createdAt`));
   return snap.exists();
 }
 
@@ -42,7 +46,6 @@ export interface RiderLocation {
 export interface RiderData {
   peerId: string;
   name: string;
-  photoURL?: string;
   lastSeen: number;
   location?: RiderLocation;
 }
@@ -52,16 +55,16 @@ export interface RiderData {
 export async function writePresence(
   roomId: string,
   riderId: string,
-  data: { peerId: string; name: string; photoURL?: string }
+  data: { peerId: string; name: string }
 ): Promise<void> {
-  const riderRef = ref(db, `rooms/${roomId}/riders/${riderId}`);
+  const riderRef = dbRef(db, `rooms/${roomId}/riders/${riderId}`);
   await set(riderRef, { ...data, lastSeen: Date.now() });
   onDisconnect(riderRef).remove();
 }
 
 /* explicit removal (used during intentional leave) */
 export function removePresence(roomId: string, riderId: string): void {
-  const riderRef = ref(db, `rooms/${roomId}/riders/${riderId}`);
+  const riderRef = dbRef(db, `rooms/${roomId}/riders/${riderId}`);
   remove(riderRef);
 }
 
@@ -70,23 +73,66 @@ export function writeLocation(
   riderId: string,
   coords: { lat: number; lng: number; heading: number | null }
 ): void {
-  const locRef = ref(db, `rooms/${roomId}/riders/${riderId}/location`);
+  const locRef = dbRef(db, `rooms/${roomId}/riders/${riderId}/location`);
   set(locRef, { ...coords, updatedAt: Date.now() });
 }
 
 export function removeLocation(roomId: string, riderId: string): void {
-  const locRef = ref(db, `rooms/${roomId}/riders/${riderId}/location`);
+  const locRef = dbRef(db, `rooms/${roomId}/riders/${riderId}/location`);
   remove(locRef);
 }
 
 /* subscribes to all riders in the room; calls onData whenever the
    list changes (including the initial snapshot).  Returns an
    unsubscribe function. */
+/* ------------------------------------------------------------------ */
+/*  Chat messages                                                      */
+/*    rooms/{roomId}/messages/{pushId}/                                */
+/*      riderId: string                                                */
+/*      riderName: string                                              */
+/*      text: string                                                   */
+/*      timestamp: number                                              */
+/* ------------------------------------------------------------------ */
+
+export interface ChatMessage {
+  riderId: string;
+  riderName: string;
+  text: string;
+  timestamp: number;
+}
+
+export function writeMessage(
+  roomId: string,
+  msg: Omit<ChatMessage, "timestamp">
+): void {
+  const msgsRef = dbRef(db, `rooms/${roomId}/messages`);
+  push(msgsRef, { ...msg, timestamp: Date.now() });
+}
+
+/* subscribes to the latest 50 messages; calls onData with newest-first
+   array whenever messages change. Returns unsubscribe function. */
+export function subscribeMessages(
+  roomId: string,
+  onData: (messages: ChatMessage[]) => void
+): () => void {
+  const msgsRef = dbRef(db, `rooms/${roomId}/messages`);
+  const msgsQuery = query(msgsRef, orderByChild("timestamp"), limitToLast(100));
+  const handler = (snapshot: { val: () => unknown }) => {
+    const raw = snapshot.val() as Record<string, ChatMessage> | null;
+    if (!raw) { onData([]); return; }
+    const list = Object.values(raw);
+    list.sort((a, b) => a.timestamp - b.timestamp);
+    onData(list);
+  };
+  onValue(msgsQuery, handler);
+  return () => off(msgsQuery, "value", handler);
+}
+
 export function subscribeRiders(
   roomId: string,
   onData: (riders: Record<string, RiderData>) => void
 ): () => void {
-  const ridersRef = ref(db, `rooms/${roomId}/riders`);
+  const ridersRef = dbRef(db, `rooms/${roomId}/riders`);
   const handler = (snapshot: { val: () => unknown }) => {
     onData((snapshot.val() as Record<string, RiderData>) ?? {});
   };

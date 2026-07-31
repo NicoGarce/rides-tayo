@@ -28,7 +28,6 @@ interface UsePeerConnectionOptions {
   roomId: string;
   riderId?: string;
   riderName?: string;
-  photoURL?: string;
 }
 
 export interface RemotePeer {
@@ -42,7 +41,6 @@ export interface RiderInfo {
   riderId: string;
   peerId: string;
   name: string;
-  photoURL?: string;
   lastSeen: number;
   location?: RiderData["location"];
 }
@@ -60,14 +58,21 @@ function haversine(lat1: number, lng1: number, lat2: number, lng2: number): numb
 }
 
 function generateRiderId(): string {
-  return Math.random().toString(36).slice(2, 9);
+  try {
+    const stored = sessionStorage.getItem("roam_rider_id");
+    if (stored) return stored;
+    const id = Math.random().toString(36).slice(2, 9);
+    sessionStorage.setItem("roam_rider_id", id);
+    return id;
+  } catch {
+    return Math.random().toString(36).slice(2, 9);
+  }
 }
 
 export function usePeerConnection({
   roomId,
   riderId: authRiderId,
   riderName = "Rider",
-  photoURL,
 }: UsePeerConnectionOptions) {
   const [remotePeers, setRemotePeers] = useState<RemotePeer[]>([]);
   const [callStatus, setCallStatus] = useState<CallStatus>("connecting");
@@ -76,6 +81,8 @@ export function usePeerConnection({
   const [micDenied, setMicDenied] = useState(false);
   const [locationDenied, setLocationDenied] = useState(false);
   const [speakingPeerIds, setSpeakingPeerIds] = useState<Set<string>>(new Set());
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [micLevel, setMicLevel] = useState(0);
 
   const peerRef = useRef<Peer | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -175,7 +182,17 @@ export function usePeerConnection({
       /* --- mic access --- */
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        /* enable the browser's built-in WebRTC audio processing so each
+           rider's mic is noise-suppressed (engine/road/wind noise) before
+           it is sent to the mesh.  echoCancellation keeps the speakerphone
+           from feeding back, autoGainControl smooths loud/quiet voices. */
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
       } catch {
         console.warn("[peer] mic access denied — running without audio");
         setMicDenied(true);
@@ -186,6 +203,7 @@ export function usePeerConnection({
         return;
       }
       localStreamRef.current = stream;
+      setLocalStream(stream);
 
       /* --- PeerJS with public cloud broker --- */
       const peer = new Peer(peerId, {
@@ -202,7 +220,7 @@ export function usePeerConnection({
         if (cancelled) return;
 
         if (initialSetupDoneRef.current) {
-          writePresence(roomId, riderId, { peerId, name: riderName, photoURL }).catch(() => {});
+          writePresence(roomId, riderId, { peerId, name: riderName }).catch(() => {});
           setCallStatus("connected");
           return;
         }
@@ -210,11 +228,11 @@ export function usePeerConnection({
         initialSetupDoneRef.current = true;
 
         /* --- Optimistically add self to the riders list (instant tile) --- */
-        setRiders([{ riderId, peerId, name: riderName, photoURL, lastSeen: Date.now() }]);
+        setRiders([{ riderId, peerId, name: riderName, lastSeen: Date.now() }]);
 
         /* --- Firebase: write presence (await to ensure data exists for the initial snapshot) --- */
         try {
-          await writePresence(roomId, riderId, { peerId, name: riderName, photoURL });
+          await writePresence(roomId, riderId, { peerId, name: riderName });
         } catch (e) {
           console.warn("[firebase] writePresence failed", e);
         }
@@ -229,12 +247,12 @@ export function usePeerConnection({
               for (const [id, r] of Object.entries(data)) {
                 list.push({ riderId: id, ...r });
               }
-              /* ensure current rider always uses locally-configured name/photo */
+              /* ensure current rider always uses locally-configured name */
               const selfIdx = list.findIndex((r) => r.riderId === riderId);
               if (selfIdx >= 0) {
-                list[selfIdx] = { ...list[selfIdx], name: riderName, photoURL: photoURL ?? list[selfIdx].photoURL };
+                list[selfIdx] = { ...list[selfIdx], name: riderName };
               } else {
-                list.push({ riderId, peerId, name: riderName, photoURL, lastSeen: Date.now() });
+                list.push({ riderId, peerId, name: riderName, lastSeen: Date.now() });
               }
               setRiders(list);
 
@@ -357,7 +375,7 @@ export function usePeerConnection({
         peerRef.current = null;
       }
     };
-  }, [roomId, peerId, callPeer, answerCall, syncRemotePeers, riderName, riderId, photoURL]);
+  }, [roomId, peerId, callPeer, answerCall, syncRemotePeers, riderName, riderId]);
 
   /* ---- location watching (always on while in the ride) ---- */
   useEffect(() => {
@@ -475,6 +493,38 @@ export function usePeerConnection({
     };
   }, [remotePeers]);
 
+  /* ---- local mic level meter ---- */
+  useEffect(() => {
+    if (!localStream) return;
+
+    let cancelled = false;
+    const ctx = new AudioContext();
+    const src = ctx.createMediaStreamSource(localStream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    src.connect(analyser);
+
+    const buffer = new Uint8Array(128);
+    let rafId: number;
+
+    function poll() {
+      if (cancelled) return;
+      analyser.getByteFrequencyData(buffer);
+      const avg = buffer.reduce((a, b) => a + b, 0) / buffer.length;
+      setMicLevel(avg / 255);
+      rafId = requestAnimationFrame(poll);
+    }
+
+    rafId = requestAnimationFrame(poll);
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+      src.disconnect();
+      ctx.close();
+    };
+  }, [localStream]);
+
   /* ---- mute / unmute ---- */
   const toggleMute = useCallback(() => {
     const stream = localStreamRef.current;
@@ -497,6 +547,7 @@ export function usePeerConnection({
     riders,
     micDenied,
     locationDenied,
+    micLevel,
     toggleMute,
     speakingPeerIds,
   };
