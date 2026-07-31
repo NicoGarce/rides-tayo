@@ -49,13 +49,13 @@ export interface RiderData {
 
 /* writes the rider's presence and sets onDisconnect() so the node is
    auto-removed when the tab closes or network drops */
-export function writePresence(
+export async function writePresence(
   roomId: string,
   riderId: string,
   data: { peerId: string; name: string; photoURL?: string }
-): void {
+): Promise<void> {
   const riderRef = ref(db, `rooms/${roomId}/riders/${riderId}`);
-  set(riderRef, { ...data, lastSeen: Date.now() });
+  await set(riderRef, { ...data, lastSeen: Date.now() });
   onDisconnect(riderRef).remove();
 }
 

@@ -198,24 +198,20 @@ export function usePeerConnection({
       });
       peerRef.current = peer;
 
-      peer.on("open", () => {
+      peer.on("open", async () => {
         if (cancelled) return;
 
         if (initialSetupDoneRef.current) {
-          try {
-            writePresence(roomId, riderId, { peerId, name: riderName, photoURL });
-          } catch {
-            /* ignore */
-          }
+          writePresence(roomId, riderId, { peerId, name: riderName, photoURL }).catch(() => {});
           setCallStatus("connected");
           return;
         }
 
         initialSetupDoneRef.current = true;
 
-        /* --- Firebase: write presence --- */
+        /* --- Firebase: write presence (await to ensure data exists for the initial snapshot) --- */
         try {
-          writePresence(roomId, riderId, { peerId, name: riderName, photoURL });
+          await writePresence(roomId, riderId, { peerId, name: riderName, photoURL });
         } catch (e) {
           console.warn("[firebase] writePresence failed", e);
         }
@@ -225,28 +221,34 @@ export function usePeerConnection({
           unsubscribeRiders = subscribeRiders(roomId, (data) => {
             if (cancelled) return;
 
-            const list: RiderInfo[] = [];
-            for (const [id, r] of Object.entries(data)) {
-              list.push({ riderId: id, ...r });
-            }
-            setRiders(list);
-
-            for (const rider of list) {
-              if (rider.riderId === riderId) continue;
-              if (rider.peerId) callPeer(rider.peerId);
-            }
-
-            const activePeerIds = new Set(
-              list.map((r) => r.peerId).filter(Boolean)
-            );
-            connectionsRef.current.forEach((_conn, pid) => {
-              if (!activePeerIds.has(pid)) {
-                _conn.close();
-                connectionsRef.current.delete(pid);
-                remoteStreamsRef.current.delete(pid);
-                syncRemotePeers();
+            try {
+              const list: RiderInfo[] = [];
+              for (const [id, r] of Object.entries(data)) {
+                list.push({ riderId: id, ...r });
               }
-            });
+              setRiders(list);
+
+              for (const rider of list) {
+                if (rider.riderId === riderId) continue;
+                if (rider.peerId) callPeer(rider.peerId);
+              }
+
+              const activePeerIds = new Set(
+                list.map((r) => r.peerId).filter(Boolean)
+              );
+              let changed = false;
+              connectionsRef.current.forEach((_conn, pid) => {
+                if (!activePeerIds.has(pid)) {
+                  try { _conn.close(); } catch { /* ignore */ }
+                  connectionsRef.current.delete(pid);
+                  remoteStreamsRef.current.delete(pid);
+                  changed = true;
+                }
+              });
+              if (changed) syncRemotePeers();
+            } catch (e) {
+              console.error("[firebase] subscribeRiders callback error", e);
+            }
           });
         } catch (e) {
           console.warn("[firebase] subscribeRiders failed", e);
@@ -256,32 +258,48 @@ export function usePeerConnection({
       });
 
       peer.on("call", (incoming) => {
-        answerCall(incoming);
+        try {
+          answerCall(incoming);
+        } catch (e) {
+          console.error("[peer] incoming call handler error", e);
+        }
       });
 
       peer.on("disconnected", () => {
         if (cancelled || isDestroyedRef.current) return;
-        setCallStatus("reconnecting");
-        peer.reconnect();
+        try {
+          setCallStatus("reconnecting");
+          peer.reconnect();
+        } catch (e) {
+          console.error("[peer] disconnected handler error", e);
+        }
 
         reconnectTimer = setTimeout(() => {
           if (cancelled || isDestroyedRef.current) return;
-          console.warn("[peer] reconnect timed out — recreating peer");
-          peer.destroy();
-          localStreamRef.current?.getTracks().forEach((t) => t.stop());
-          localStreamRef.current = null;
-          peerRef.current = null;
-          connectionsRef.current.forEach((c) => c.close());
-          connectionsRef.current.clear();
-          remoteStreamsRef.current.clear();
-          initialSetupDoneRef.current = false;
-          if (!cancelled) init();
+          try {
+            console.warn("[peer] reconnect timed out — recreating peer");
+            peer.destroy();
+            localStreamRef.current?.getTracks().forEach((t) => t.stop());
+            localStreamRef.current = null;
+            peerRef.current = null;
+            connectionsRef.current.forEach((c) => c.close());
+            connectionsRef.current.clear();
+            remoteStreamsRef.current.clear();
+            initialSetupDoneRef.current = false;
+            if (!cancelled) init();
+          } catch (e) {
+            console.error("[peer] reconnect handler error", e);
+          }
         }, 15000);
       });
 
       peer.on("close", () => {
-        if (!cancelled && !isDestroyedRef.current) {
-          setCallStatus("disconnected");
+        try {
+          if (!cancelled && !isDestroyedRef.current) {
+            setCallStatus("disconnected");
+          }
+        } catch (e) {
+          console.error("[peer] close handler error", e);
         }
       });
 

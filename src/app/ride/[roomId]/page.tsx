@@ -33,7 +33,8 @@ function RiderTile({
   muted: boolean;
   speaking: boolean;
 }) {
-  const initial = name.charAt(0).toUpperCase();
+  const safeName = name ?? "Rider";
+  const initial = safeName.charAt(0).toUpperCase();
 
   const borderBase = isSelf ? "#22c55e" : (muted ? "#6b7280" : "#3b82f6");
   const borderColor = speaking ? "#22d3ee" : borderBase;
@@ -68,7 +69,7 @@ function RiderTile({
         </div>
       )}
       <span className="text-sm font-medium text-[var(--foreground)] truncate max-w-24 text-center">
-        {name}{isSelf ? " (you)" : ""}
+        {safeName}{isSelf ? " (you)" : ""}
       </span>
     </div>
   );
@@ -88,7 +89,7 @@ export default function RidePage({ params }: Props) {
 
   const riderName =
     typeof window !== "undefined"
-      ? sessionStorage.getItem("roam_name") || user?.displayName || "Rider"
+      ? (() => { try { return sessionStorage.getItem("roam_name"); } catch { return null; } })() || user?.displayName || "Rider"
       : "Rider";
 
   const {
