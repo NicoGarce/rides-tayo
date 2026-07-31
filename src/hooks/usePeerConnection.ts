@@ -229,6 +229,13 @@ export function usePeerConnection({
               for (const [id, r] of Object.entries(data)) {
                 list.push({ riderId: id, ...r });
               }
+              /* ensure current rider always uses locally-configured name/photo */
+              const selfIdx = list.findIndex((r) => r.riderId === riderId);
+              if (selfIdx >= 0) {
+                list[selfIdx] = { ...list[selfIdx], name: riderName, photoURL: photoURL ?? list[selfIdx].photoURL };
+              } else {
+                list.push({ riderId, peerId, name: riderName, photoURL, lastSeen: Date.now() });
+              }
               setRiders(list);
 
               for (const rider of list) {
