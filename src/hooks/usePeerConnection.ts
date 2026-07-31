@@ -209,6 +209,9 @@ export function usePeerConnection({
 
         initialSetupDoneRef.current = true;
 
+        /* --- Optimistically add self to the riders list (instant tile) --- */
+        setRiders([{ riderId, peerId, name: riderName, photoURL, lastSeen: Date.now() }]);
+
         /* --- Firebase: write presence (await to ensure data exists for the initial snapshot) --- */
         try {
           await writePresence(roomId, riderId, { peerId, name: riderName, photoURL });

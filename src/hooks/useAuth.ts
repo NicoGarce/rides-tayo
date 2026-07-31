@@ -71,7 +71,17 @@ export function useAuth(): AuthState {
     if (fbUser) {
       setUser(buildUser(fbUser));
     } else {
-      await signInAnonymously(auth);
+      try {
+        await signInAnonymously(auth);
+      } catch (e: unknown) {
+        const code = (e as { code?: string }).code;
+        if (code === "auth/admin-restricted-operation") {
+          throw new Error(
+            "Anonymous sign-in is not enabled. Go to Firebase Console → Authentication → Sign-in method and enable the Anonymous provider."
+          );
+        }
+        throw e;
+      }
     }
   }, []);
 

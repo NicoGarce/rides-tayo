@@ -10,21 +10,27 @@ interface Props {
 
 export default function JoinPage({ params }: Props) {
   const router = useRouter();
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, signInWithEmail } = useAuth();
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [joining, setJoining] = useState(false);
-
-  useEffect(() => {
-    if (!authLoading && !user) {
-      router.replace("/");
-    }
-  }, [authLoading, user, router]);
+  const [authError, setAuthError] = useState("");
 
   useEffect(() => {
     if (user?.displayName) {
       setName(user.displayName);
     }
   }, [user]);
+
+  async function handleSignIn() {
+    if (!email.trim()) return;
+    setAuthError("");
+    try {
+      await signInWithEmail(email.trim());
+    } catch (e: unknown) {
+      setAuthError((e as { message?: string }).message || "Failed to sign in");
+    }
+  }
 
   async function handleJoin() {
     const displayName = name.trim() || user?.displayName || "Rider";
@@ -53,7 +59,36 @@ export default function JoinPage({ params }: Props) {
     router.push(`/ride/${params.roomId}`);
   }
 
-  if (authLoading || !user) return null;
+  if (authLoading) return null;
+
+  if (!user) {
+    return (
+      <main className="flex flex-col min-h-dvh">
+        <div className="flex-1 flex flex-col items-center justify-center gap-6 px-6 max-w-sm mx-auto w-full">
+          <h1 className="text-2xl font-semibold">Join Ride</h1>
+          <p className="text-sm text-[var(--muted)] text-center">
+            Sign in with your email to join <span className="font-mono">{params.roomId}</span>
+          </p>
+          <div className="w-full flex flex-col gap-2">
+            <input
+              type="email"
+              placeholder="Enter your email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSignIn()}
+              className="w-full px-4 py-3 rounded-xl bg-[var(--surface)] border border-[var(--border)] text-[var(--foreground)] placeholder-[var(--muted)] outline-none focus:border-[var(--accent)] transition-colors"
+            />
+            <button onClick={handleSignIn} className="btn-primary w-full">
+              Sign In
+            </button>
+            {authError && (
+              <p className="text-xs text-red-400 text-center">{authError}</p>
+            )}
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="flex flex-col min-h-dvh">
