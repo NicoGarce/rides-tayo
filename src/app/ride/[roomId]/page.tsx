@@ -8,6 +8,8 @@ import ChatPanel from "@/components/ChatPanel";
 import { usePeerConnection } from "@/hooks/usePeerConnection";
 import { useAuth } from "@/hooks/useAuth";
 import type { AppUser } from "@/hooks/useAuth";
+import { subscribeDestination, removeDestination } from "@/lib/room";
+import type { Destination } from "@/lib/room";
 
 const RideMap = dynamic(() => import("@/components/RideMap"), {
   ssr: false,
@@ -17,6 +19,16 @@ const RideMap = dynamic(() => import("@/components/RideMap"), {
     </div>
   ),
 });
+
+const DestinationPicker = dynamic(
+  () => import("@/components/DestinationPicker"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="absolute inset-0 z-40 bg-[var(--background)] animate-pulse" />
+    ),
+  }
+);
 
 interface Props {
   params: { roomId: string };
@@ -119,6 +131,12 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
   const [viewMode, setViewMode] = useState<"tiles" | "map" | "list">("tiles");
   const [showShare, setShowShare] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  const [destination, setDestination] = useState<Destination | null>(null);
+  const [showDestinationPicker, setShowDestinationPicker] = useState(false);
+
+  useEffect(() => {
+    return subscribeDestination(roomId, setDestination);
+  }, [roomId]);
 
   const riderName =
     typeof window !== "undefined"
@@ -182,6 +200,27 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
     typeof window !== "undefined"
       ? `${window.location.origin}/ride/${roomId}/join`
       : "";
+
+  const destShortLabel = destination
+    ? destination.label.split(",")[0]
+    : "";
+  const destDuration = destination?.durationS
+    ? Math.max(1, Math.round(destination.durationS / 60))
+    : null;
+  const destDistance =
+    destination?.distanceM != null
+      ? destination.distanceM >= 1000
+        ? `${(destination.distanceM / 1000).toFixed(1)} km`
+        : `${Math.round(destination.distanceM)} m`
+      : null;
+
+  async function handleClearDestination() {
+    try {
+      await removeDestination(roomId);
+    } catch {
+      /* ignore */
+    }
+  }
 
   return (
     <main className="flex flex-col min-h-dvh bg-[var(--background)]">
@@ -257,8 +296,56 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
           <div className="flex-1 flex flex-col md:flex-row gap-4 px-4 pb-2 min-h-0">
             <div className="flex-1 relative min-h-[250px] md:min-h-0">
               <div className="absolute inset-0 rounded-xl overflow-hidden">
-                <RideMap riders={riders} myRiderId={myRiderId} />
+                <RideMap riders={riders} myRiderId={myRiderId} destination={destination} />
               </div>
+              {destination ? (
+                <div
+                  className="absolute top-2 left-2 right-2 flex items-center gap-2 rounded-xl bg-[var(--surface)] border border-[var(--border)] px-3 py-2 shadow-lg"
+                  style={{ zIndex: 500 }}
+                >
+                  <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" style={{ color: "#f59e0b" }} fill="#f59e0b">
+                    <path d="M12 2a10 10 0 0 0-4 19.2V22h8v-.8A10 10 0 0 0 12 2z" />
+                    <path d="M8.5 7.5h7v5h-3l-1.2 2.4L10 12.5H8.5z" fill="#1a1a2e" />
+                  </svg>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold truncate">{destShortLabel}</p>
+                    <p className="text-[11px] text-[var(--muted)]">
+                      {destDuration ? `${destDuration} min away` : "Route planned"}
+                      {destDistance ? ` · ${destDistance}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setShowDestinationPicker(true)}
+                    aria-label="Change destination"
+                    className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-[var(--muted)] hover:text-[var(--foreground)] active:bg-[var(--border)] transition-colors"
+                  >
+                    <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={handleClearDestination}
+                    aria-label="Clear destination"
+                    className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-[var(--muted)] hover:text-red-400 active:bg-[var(--border)] transition-colors"
+                  >
+                    <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowDestinationPicker(true)}
+                  className="absolute top-2 left-2 flex items-center gap-1.5 rounded-xl bg-[var(--surface)] border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--foreground)] shadow-lg active:bg-[var(--border)] transition-colors"
+                  style={{ zIndex: 500 }}
+                >
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" style={{ color: "#f59e0b" }} fill="#f59e0b">
+                    <path d="M12 2a10 10 0 0 0-4 19.2V22h8v-.8A10 10 0 0 0 12 2z" />
+                  </svg>
+                  Pin a destination
+                </button>
+              )}
             </div>
             {riders.length > 0 && (
               <div className="w-full md:w-72 shrink-0 overflow-y-auto max-h-[160px] md:max-h-full space-y-1.5">
@@ -360,6 +447,16 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
           riderId={myRiderId}
           riderName={riderName}
           onClose={() => setShowChat(false)}
+        />
+      )}
+
+      {/* destination picker overlay */}
+      {showDestinationPicker && (
+        <DestinationPicker
+          roomId={roomId}
+          riderId={myRiderId}
+          riderName={riderName}
+          onClose={() => setShowDestinationPicker(false)}
         />
       )}
 

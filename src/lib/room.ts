@@ -82,6 +82,59 @@ export function removeLocation(roomId: string, riderId: string): void {
   remove(locRef);
 }
 
+/* ------------------------------------------------------------------ */
+/*  Destination (shared route target)                                  */
+/*    rooms/{roomId}/destination/                                      */
+/*      label: string (human-readable place name)                     */
+/*      lat/lng: number (pinned destination)                          */
+/*      startLat/startLng: number (route origin)                      */
+/*      startLabel: string                                            */
+/*      geometryStr: string (JSON [[lat,lng],...] polyline)           */
+/*      distanceM/durationS: number|null (route totals)               */
+/*      setByRiderId/setByName: string                                */
+/*      updatedAt: number (epoch ms)                                  */
+/* ------------------------------------------------------------------ */
+
+export interface Destination {
+  label: string;
+  lat: number;
+  lng: number;
+  startLat: number;
+  startLng: number;
+  startLabel: string;
+  geometryStr: string;
+  distanceM: number | null;
+  durationS: number | null;
+  setByRiderId: string;
+  setByName: string;
+  updatedAt: number;
+}
+
+export function writeDestination(
+  roomId: string,
+  dest: Destination
+): Promise<void> {
+  const destRef = dbRef(db, `rooms/${roomId}/destination`);
+  return set(destRef, dest);
+}
+
+export function removeDestination(roomId: string): Promise<void> {
+  const destRef = dbRef(db, `rooms/${roomId}/destination`);
+  return remove(destRef);
+}
+
+export function subscribeDestination(
+  roomId: string,
+  onData: (dest: Destination | null) => void
+): () => void {
+  const destRef = dbRef(db, `rooms/${roomId}/destination`);
+  const handler = (snapshot: { val: () => unknown }) => {
+    onData((snapshot.val() as Destination) ?? null);
+  };
+  onValue(destRef, handler);
+  return () => off(destRef, "value", handler);
+}
+
 /* subscribes to all riders in the room; calls onData whenever the
    list changes (including the initial snapshot).  Returns an
    unsubscribe function. */

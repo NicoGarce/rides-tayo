@@ -2,7 +2,20 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { useAuth } from "@/hooks/useAuth";
+import { subscribeDestination, removeDestination } from "@/lib/room";
+import type { Destination } from "@/lib/room";
+
+const DestinationPicker = dynamic(
+  () => import("@/components/DestinationPicker"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="absolute inset-0 z-40 bg-[var(--background)] animate-pulse" />
+    ),
+  }
+);
 
 interface Props {
   params: { roomId: string };
@@ -15,12 +28,18 @@ export default function JoinPage({ params }: Props) {
   const [email, setEmail] = useState("");
   const [joining, setJoining] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [destination, setDestination] = useState<Destination | null>(null);
+  const [showDestinationPicker, setShowDestinationPicker] = useState(false);
 
   useEffect(() => {
     if (user?.displayName) {
       setName(user.displayName);
     }
   }, [user]);
+
+  useEffect(() => {
+    return subscribeDestination(params.roomId, setDestination);
+  }, [params.roomId]);
 
   async function handleSignIn() {
     if (!email.trim()) return;
@@ -91,7 +110,7 @@ export default function JoinPage({ params }: Props) {
   }
 
   return (
-    <main className="flex flex-col min-h-dvh">
+    <main className="relative flex flex-col min-h-dvh">
       <div className="flex-1 flex flex-col items-center justify-center gap-8 px-6 max-w-sm mx-auto w-full">
         <div className="text-center">
           <h1 className="text-2xl font-semibold">Join Ride</h1>
@@ -147,6 +166,49 @@ export default function JoinPage({ params }: Props) {
           </div>
         </div>
 
+        <div className="w-full rounded-xl bg-[var(--surface)] border border-[var(--border)] p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-[var(--foreground)]">
+              Destination
+            </span>
+            {destination && (
+              <button
+                onClick={() => removeDestination(params.roomId)}
+                className="text-xs text-[var(--muted)] hover:text-red-400 transition-colors"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          {destination ? (
+            <div className="flex items-center gap-2 px-1">
+              <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" style={{ color: "#f59e0b" }} fill="#f59e0b">
+                <path d="M12 2a10 10 0 0 0-4 19.2V22h8v-.8A10 10 0 0 0 12 2z" />
+                <path d="M8.5 7.5h7v5h-3l-1.2 2.4L10 12.5H8.5z" fill="#1a1a2e" />
+              </svg>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">
+                  {destination.label.split(",")[0]}
+                </p>
+                <p className="text-xs text-[var(--muted)] truncate">
+                  {destination.label}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-[var(--muted)] px-1">
+              Optional — everyone in the ride sees the route to your pinned
+              destination.
+            </p>
+          )}
+          <button
+            onClick={() => setShowDestinationPicker(true)}
+            className="w-full py-2 rounded-lg bg-[var(--accent)] text-[var(--background)] text-sm font-semibold active:opacity-80 transition-opacity"
+          >
+            {destination ? "Change destination" : "Pin a destination"}
+          </button>
+        </div>
+
         <button
           onClick={handleJoin}
           disabled={joining}
@@ -155,6 +217,15 @@ export default function JoinPage({ params }: Props) {
           {joining ? "Requesting permissions…" : "Join"}
         </button>
       </div>
+
+      {showDestinationPicker && (
+        <DestinationPicker
+          roomId={params.roomId}
+          riderId={user.uid}
+          riderName={name.trim() || user.displayName || "Rider"}
+          onClose={() => setShowDestinationPicker(false)}
+        />
+      )}
     </main>
   );
 }
