@@ -8,8 +8,8 @@ import ChatPanel from "@/components/ChatPanel";
 import { usePeerConnection } from "@/hooks/usePeerConnection";
 import { useAuth } from "@/hooks/useAuth";
 import type { AppUser } from "@/hooks/useAuth";
-import { subscribeDestination, removeDestination } from "@/lib/room";
-import type { Destination } from "@/lib/room";
+import { subscribeDestination, removeDestination, subscribeMusicState } from "@/lib/room";
+import type { Destination, MusicState } from "@/lib/room";
 
 const RideMap = dynamic(() => import("@/components/RideMap"), {
   ssr: false,
@@ -29,6 +29,10 @@ const DestinationPicker = dynamic(
     ),
   }
 );
+
+const MusicPanel = dynamic(() => import("@/components/MusicPanel"), {
+  ssr: false,
+});
 
 interface Props {
   params: { roomId: string };
@@ -131,11 +135,17 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
   const [viewMode, setViewMode] = useState<"tiles" | "map" | "list">("tiles");
   const [showShare, setShowShare] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  const [showMusic, setShowMusic] = useState(false);
   const [destination, setDestination] = useState<Destination | null>(null);
+  const [music, setMusic] = useState<MusicState | null>(null);
   const [showDestinationPicker, setShowDestinationPicker] = useState(false);
 
   useEffect(() => {
     return subscribeDestination(roomId, setDestination);
+  }, [roomId]);
+
+  useEffect(() => {
+    return subscribeMusicState(roomId, setMusic);
   }, [roomId]);
 
   const riderName =
@@ -440,6 +450,16 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
         )}
       </div>
 
+      {/* music overlay — always mounted (hidden player keeps playing
+          when the panel is closed) */}
+      <MusicPanel
+        roomId={roomId}
+        riderId={myRiderId}
+        riderName={riderName}
+        open={showMusic}
+        onClose={() => setShowMusic(false)}
+      />
+
       {/* chat overlay */}
       {showChat && (
         <ChatPanel
@@ -492,6 +512,24 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
             </button>
           </div>
         </div>
+      )}
+
+      {/* now-playing chip */}
+      {music && !showMusic && (
+        <button
+          onClick={() => setShowMusic(true)}
+          className="mx-6 mb-1 flex items-center gap-2 px-4 py-2 rounded-full bg-[var(--surface)] border border-[var(--border)] shadow-lg active:bg-[var(--border)] transition-colors self-stretch"
+          aria-label="Open music player"
+        >
+          <svg viewBox="0 0 24 24" className="w-4 h-4 shrink-0 text-[var(--accent)]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 18V5l12-2v13" />
+            <circle cx="6" cy="18" r="3" />
+            <circle cx="18" cy="16" r="3" />
+          </svg>
+          <span className="flex-1 min-w-0 text-xs font-medium truncate text-left">
+            {music.isPlaying ? "▶" : "⏸"} {music.title}
+          </span>
+        </button>
       )}
 
       {/* bottom control bar */}
@@ -586,6 +624,23 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
             <circle cx="18" cy="19" r="3" />
             <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
             <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+          </svg>
+        </button>
+
+        {/* music */}
+        <button
+          onClick={() => setShowMusic(true)}
+          className={`touch-target w-12 h-12 rounded-full transition-colors shrink-0 ${
+            music
+              ? "bg-[var(--accent)] text-[var(--background)]"
+              : "bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)]"
+          }`}
+          aria-label="Open music"
+        >
+          <svg viewBox="0 0 24 24" className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 18V5l12-2v13" />
+            <circle cx="6" cy="18" r="3" />
+            <circle cx="18" cy="16" r="3" />
           </svg>
         </button>
 

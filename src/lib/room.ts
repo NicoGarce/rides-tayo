@@ -181,6 +181,124 @@ export function subscribeMessages(
   return () => off(msgsQuery, "value", handler);
 }
 
+/* ------------------------------------------------------------------ */
+/*  Music sharing                                                      */
+/*    rooms/{roomId}/music/state/   (singleton "now playing")          */
+/*      kind: "video" | "playlist"                                     */
+/*      videoId?: string (YouTube video id, when kind = "video")       */
+/*      listId?: string  (YouTube playlist id, when kind = "playlist") */
+/*      title: string                                                  */
+/*      isPlaying: boolean                                             */
+/*      positionSec: number (playback position at updatedAt)           */
+/*      updatedAt: number (epoch ms)                                   */
+/*      controllerId/controllerName: rider driving sync                */
+/*    rooms/{roomId}/music/queue/{pushId}/                             */
+/*      id: string (pushId)                                            */
+/*      kind: "video" | "playlist"                                     */
+/*      videoId?/listId?: string                                       */
+/*      title: string                                                  */
+/*      addedBy/addedByName: string                                    */
+/*      timestamp: number (epoch ms)                                   */
+/* ------------------------------------------------------------------ */
+
+export type MusicKind = "video" | "playlist";
+
+/* Firebase RTDB rejects `undefined` values; drop any optional keys
+   (e.g. listId on a video, videoId on a playlist) before writing. */
+function stripUndefined<T extends object>(obj: T): T {
+  const clean = { ...obj } as Record<string, unknown>;
+  for (const key of Object.keys(clean)) {
+    if (clean[key] === undefined) delete clean[key];
+  }
+  return clean as T;
+}
+
+export interface MusicState {
+  kind: MusicKind;
+  videoId?: string;
+  listId?: string;
+  title: string;
+  isPlaying: boolean;
+  positionSec: number;
+  updatedAt: number;
+  controllerId: string;
+  controllerName: string;
+}
+
+export interface MusicQueueItem {
+  id: string;
+  kind: MusicKind;
+  videoId?: string;
+  listId?: string;
+  title: string;
+  addedBy: string;
+  addedByName: string;
+  timestamp: number;
+}
+
+export function writeMusicState(
+  roomId: string,
+  state: MusicState
+): Promise<void> {
+  const stateRef = dbRef(db, `rooms/${roomId}/music/state`);
+  return set(stateRef, stripUndefined(state));
+}
+
+export function removeMusicState(roomId: string): Promise<void> {
+  const stateRef = dbRef(db, `rooms/${roomId}/music/state`);
+  return remove(stateRef);
+}
+
+export function subscribeMusicState(
+  roomId: string,
+  onData: (state: MusicState | null) => void
+): () => void {
+  const stateRef = dbRef(db, `rooms/${roomId}/music/state`);
+  const handler = (snapshot: { val: () => unknown }) => {
+    onData((snapshot.val() as MusicState) ?? null);
+  };
+  onValue(stateRef, handler);
+  return () => off(stateRef, "value", handler);
+}
+
+export function pushMusicQueue(
+  roomId: string,
+  item: Omit<MusicQueueItem, "id" | "timestamp">
+): Promise<void> {
+  const queueRef = dbRef(db, `rooms/${roomId}/music/queue`);
+  const itemRef = push(queueRef);
+  /* store the generated key inside the value so readers get the id */
+  return set(itemRef, {
+    ...stripUndefined(item),
+    id: itemRef.key,
+    timestamp: Date.now(),
+  });
+}
+
+export function removeMusicQueueItem(roomId: string, id: string): void {
+  const itemRef = dbRef(db, `rooms/${roomId}/music/queue/${id}`);
+  remove(itemRef);
+}
+
+/* subscribes to the queue ordered oldest-first (next to play is first).
+   Returns unsubscribe function. */
+export function subscribeMusicQueue(
+  roomId: string,
+  onData: (items: MusicQueueItem[]) => void
+): () => void {
+  const queueRef = dbRef(db, `rooms/${roomId}/music/queue`);
+  const queueQuery = query(queueRef, orderByChild("timestamp"));
+  const handler = (snapshot: { val: () => unknown }) => {
+    const raw = snapshot.val() as Record<string, MusicQueueItem> | null;
+    if (!raw) { onData([]); return; }
+    const list = Object.values(raw);
+    list.sort((a, b) => a.timestamp - b.timestamp);
+    onData(list);
+  };
+  onValue(queueQuery, handler);
+  return () => off(queueRef, "value", handler);
+}
+
 export function subscribeRiders(
   roomId: string,
   onData: (riders: Record<string, RiderData>) => void
