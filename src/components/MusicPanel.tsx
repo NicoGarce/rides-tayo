@@ -27,7 +27,12 @@ interface Props {
   riderName: string;
   open: boolean;
   onClose: () => void;
+  /* true while someone is talking on the intercom — ducks the music */
+  duck?: boolean;
 }
+
+/* fraction of the user's volume to duck to while someone speaks */
+const DUCK_FACTOR = 0.25;
 
 /* minimal typing for the YouTube IFrame API */
 interface YTPlayer {
@@ -150,7 +155,14 @@ function formatTime(totalSec: number): string {
   return `${m}:${String(s % 60).padStart(2, "0")}`;
 }
 
-export default function MusicPanel({ roomId, riderId, riderName, open, onClose }: Props) {
+export default function MusicPanel({
+  roomId,
+  riderId,
+  riderName,
+  open,
+  onClose,
+  duck = false,
+}: Props) {
   const [musicState, setMusicState] = useState<MusicState | null>(null);
   const [queue, setQueue] = useState<MusicQueueItem[]>([]);
   const [input, setInput] = useState("");
@@ -482,16 +494,37 @@ export default function MusicPanel({ roomId, riderId, riderName, open, onClose }
     removeMusicState(roomId);
   }
 
-  /* apply the rider's local volume to the player whenever it changes */
+  /* apply the rider's local volume to the player, ramping smoothly and
+     ducking to DUCK_FACTOR of the set level while someone is talking */
   useEffect(() => {
     const p = playerRef.current;
     if (!p || !playerReady) return;
-    try {
-      p.setVolume(volume);
-    } catch {
-      /* ignore */
-    }
-  }, [volume, playerReady]);
+    const target = localMuted
+      ? 0
+      : Math.round(volume * (duck ? DUCK_FACTOR : 1));
+
+    let timer: number;
+    const step = () => {
+      const cur = p.getVolume?.() ?? 0;
+      const diff = target - cur;
+      if (Math.abs(diff) <= 5) {
+        try {
+          p.setVolume(target);
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      try {
+        p.setVolume(Math.round(cur + Math.sign(diff) * 7));
+      } catch {
+        /* ignore */
+      }
+      timer = window.setTimeout(step, 70);
+    };
+    step();
+    return () => clearTimeout(timer);
+  }, [volume, duck, localMuted, playerReady]);
 
   function setVolume(v: number) {
     const clamped = Math.min(100, Math.max(0, Math.round(v)));
@@ -661,7 +694,7 @@ export default function MusicPanel({ roomId, riderId, riderName, open, onClose }
               </button>
             </div>
             {/* per-user volume */}
-            <div className="flex items-center gap-2 mt-3 px-1">
+            <div className="flex items-center gap-2 mt-3 px-1" title="Volume only affects your device; auto-ducked while someone talks">
               <svg viewBox="0 0 24 24" className="w-4 h-4 shrink-0 text-[var(--muted)]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" />
                 {volume > 0 && !localMuted ? (
@@ -690,6 +723,11 @@ export default function MusicPanel({ roomId, riderId, riderName, open, onClose }
                 {volume}%
               </span>
             </div>
+            {duck && musicState?.isPlaying && !localMuted && (
+              <p className="text-[11px] text-[var(--muted)] text-center mt-1">
+                Ducking while someone talks…
+              </p>
+            )}
 
             {musicState && (
               <button

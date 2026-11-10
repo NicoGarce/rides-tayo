@@ -458,6 +458,7 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
         riderName={riderName}
         open={showMusic}
         onClose={() => setShowMusic(false)}
+        duck={speakingPeerIds.size > 0}
       />
 
       {/* chat overlay */}
