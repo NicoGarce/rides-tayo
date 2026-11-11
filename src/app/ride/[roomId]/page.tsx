@@ -617,6 +617,7 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
           </svg>
           <button
             onClick={toggleMute}
+            disabled={isDeafened}
             className={`touch-target w-14 sm:w-16 h-14 sm:h-16 rounded-full transition-colors ${
               isMuted
                 ? "bg-red-600 text-white"
@@ -627,7 +628,13 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
                 ? "0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1)"
                 : `0 0 ${6 + micLevel * 24}px rgba(34, 211, 238, ${0.2 + micLevel * 0.5}), 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1)`,
             }}
-            aria-label={isMuted ? "Unmute" : "Mute"}
+            aria-label={
+              isDeafened
+                ? "Microphone muted while deafened"
+                : isMuted
+                  ? "Unmute"
+                  : "Mute"
+            }
           >
             {isMuted ? (
               <svg viewBox="0 0 24 24" className="w-6 sm:w-7 h-6 sm:h-7 mx-auto" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

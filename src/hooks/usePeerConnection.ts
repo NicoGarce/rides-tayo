@@ -543,29 +543,30 @@ export function usePeerConnection({
     };
   }, [localStream]);
 
+  const setMicrophoneMuted = useCallback((muted: boolean) => {
+    const audioTrack = localStreamRef.current?.getAudioTracks()[0];
+    if (audioTrack) audioTrack.enabled = !muted;
+    setIsMuted(muted);
+    mutedRef.current = muted;
+    /* broadcast so other riders' tiles show the muted badge */
+    setRiderMuted(roomId, riderIdRef.current, muted).catch(() => {});
+  }, [roomId]);
+
   /* ---- mute / unmute ---- */
   const toggleMute = useCallback(() => {
-    const stream = localStreamRef.current;
-    if (!stream) return;
-    const audioTrack = stream.getAudioTracks()[0];
-    if (audioTrack) {
-      audioTrack.enabled = !audioTrack.enabled;
-      const muted = !audioTrack.enabled;
-      setIsMuted(muted);
-      mutedRef.current = muted;
-      /* broadcast so other riders' tiles show the muted badge */
-      setRiderMuted(roomId, riderIdRef.current, muted).catch(() => {});
-    }
-  }, [roomId]);
+    if (deafenedRef.current) return;
+    setMicrophoneMuted(!mutedRef.current);
+  }, [setMicrophoneMuted]);
 
   /* ---- deafen / undeafen (silence all incoming audio locally) ---- */
   const toggleDeafen = useCallback(() => {
     const next = !deafenedRef.current;
     deafenedRef.current = next;
     setIsDeafened(next);
+    if (next) setMicrophoneMuted(true);
     /* broadcast so other riders' tiles show the deafened badge */
     setRiderDeafened(roomId, riderIdRef.current, next).catch(() => {});
-  }, [roomId]);
+  }, [roomId, setMicrophoneMuted]);
 
   const riderCount = riders.length > 0 ? riders.length : remotePeers.length + 1;
 
