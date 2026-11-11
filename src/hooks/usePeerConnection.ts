@@ -8,6 +8,8 @@ import {
   writeLocation,
   removeLocation,
   subscribeRiders,
+  setRiderMuted,
+  setRiderDeafened,
 } from "@/lib/room";
 import type { RiderData } from "@/lib/room";
 import { useWakeLock } from "@/hooks/useWakeLock";
@@ -42,6 +44,8 @@ export interface RiderInfo {
   peerId: string;
   name: string;
   lastSeen: number;
+  muted?: boolean;
+  deafened?: boolean;
   location?: RiderData["location"];
 }
 
@@ -77,6 +81,7 @@ export function usePeerConnection({
   const [remotePeers, setRemotePeers] = useState<RemotePeer[]>([]);
   const [callStatus, setCallStatus] = useState<CallStatus>("connecting");
   const [isMuted, setIsMuted] = useState(false);
+  const [isDeafened, setIsDeafened] = useState(false);
   const [riders, setRiders] = useState<RiderInfo[]>([]);
   const [micDenied, setMicDenied] = useState(false);
   const [locationDenied, setLocationDenied] = useState(false);
@@ -91,6 +96,10 @@ export function usePeerConnection({
   const isDestroyedRef = useRef(false);
   const riderIdRef = useRef(authRiderId || generateRiderId());
   const initialSetupDoneRef = useRef(false);
+  /* mirrors isMuted so presence writes can include the flag */
+  const mutedRef = useRef(false);
+  /* mirrors isDeafened so presence writes can include the flag */
+  const deafenedRef = useRef(false);
 
   const riderId = riderIdRef.current;
   const peerId = `${roomId}-${riderId}`;
@@ -220,7 +229,7 @@ export function usePeerConnection({
         if (cancelled) return;
 
         if (initialSetupDoneRef.current) {
-          writePresence(roomId, riderId, { peerId, name: riderName }).catch(() => {});
+          writePresence(roomId, riderId, { peerId, name: riderName, muted: mutedRef.current, deafened: deafenedRef.current }).catch(() => {});
           setCallStatus("connected");
           return;
         }
@@ -232,7 +241,7 @@ export function usePeerConnection({
 
         /* --- Firebase: write presence (await to ensure data exists for the initial snapshot) --- */
         try {
-          await writePresence(roomId, riderId, { peerId, name: riderName });
+          await writePresence(roomId, riderId, { peerId, name: riderName, muted: mutedRef.current, deafened: deafenedRef.current });
         } catch (e) {
           console.warn("[firebase] writePresence failed", e);
         }
@@ -442,6 +451,12 @@ export function usePeerConnection({
     if (remotePeers.length === 0) return;
 
     const ctx = new AudioContext();
+    /* autoplay policies can start the context suspended — resume it so
+       the analysers actually produce data (drives speaking rings and
+       music ducking) */
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => {});
+    }
     const analysers = new Map<string, { src: MediaStreamAudioSourceNode; analyser: AnalyserNode }>();
 
     for (const peer of remotePeers) {
@@ -499,6 +514,9 @@ export function usePeerConnection({
 
     let cancelled = false;
     const ctx = new AudioContext();
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => {});
+    }
     const src = ctx.createMediaStreamSource(localStream);
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 256;
@@ -532,9 +550,22 @@ export function usePeerConnection({
     const audioTrack = stream.getAudioTracks()[0];
     if (audioTrack) {
       audioTrack.enabled = !audioTrack.enabled;
-      setIsMuted(!audioTrack.enabled);
+      const muted = !audioTrack.enabled;
+      setIsMuted(muted);
+      mutedRef.current = muted;
+      /* broadcast so other riders' tiles show the muted badge */
+      setRiderMuted(roomId, riderIdRef.current, muted).catch(() => {});
     }
-  }, []);
+  }, [roomId]);
+
+  /* ---- deafen / undeafen (silence all incoming audio locally) ---- */
+  const toggleDeafen = useCallback(() => {
+    const next = !deafenedRef.current;
+    deafenedRef.current = next;
+    setIsDeafened(next);
+    /* broadcast so other riders' tiles show the deafened badge */
+    setRiderDeafened(roomId, riderIdRef.current, next).catch(() => {});
+  }, [roomId]);
 
   const riderCount = riders.length > 0 ? riders.length : remotePeers.length + 1;
 
@@ -549,6 +580,8 @@ export function usePeerConnection({
     locationDenied,
     micLevel,
     toggleMute,
+    toggleDeafen,
+    isDeafened,
     speakingPeerIds,
   };
 }

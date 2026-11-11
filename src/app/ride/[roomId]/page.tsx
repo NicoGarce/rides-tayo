@@ -42,12 +42,14 @@ function RiderTile({
   name,
   isSelf,
   muted,
+  deafened,
   speaking,
   micLevel = 0,
 }: {
   name: string;
   isSelf: boolean;
   muted: boolean;
+  deafened?: boolean;
   speaking: boolean;
   micLevel?: number;
 }) {
@@ -96,8 +98,15 @@ function RiderTile({
         >
           {initial}
         </div>
-        {/* muted overlay */}
-        {muted && (
+        {/* deafened overlay (takes precedence over muted) */}
+        {deafened ? (
+          <div className="absolute -bottom-0.5 -right-0.5 w-7 h-7 rounded-full bg-red-600 flex items-center justify-center shadow-md border-2 border-[var(--background)]">
+            <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 14v5a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1H4a3 3 0 0 1 0-6 7 7 0 0 1 14 0 3 3 0 0 1 0 6h-2a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-5" />
+              <line x1="3" y1="3" x2="21" y2="21" />
+            </svg>
+          </div>
+        ) : muted && (
           <div className="absolute -bottom-0.5 -right-0.5 w-7 h-7 rounded-full bg-red-600 flex items-center justify-center shadow-md border-2 border-[var(--background)]">
             <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <rect x="9" y="2" width="6" height="12" rx="3" />
@@ -158,12 +167,14 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
     remotePeers,
     callStatus,
     isMuted,
+    isDeafened,
     riderCount,
     riders,
     micDenied,
     locationDenied,
     micLevel,
     toggleMute,
+    toggleDeafen,
     speakingPeerIds,
   } = usePeerConnection({
     roomId,
@@ -194,13 +205,23 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
         const audio = document.createElement("audio");
         audio.srcObject = peer.stream;
         audio.autoplay = true;
+        audio.muted = isDeafened;
         audio.setAttribute("playsinline", "");
         audio.dataset.peerId = peer.peerId;
         audio.style.display = "none";
         container.appendChild(audio);
       }
     }
-  }, [remotePeers]);
+  }, [remotePeers, isDeafened]);
+
+  /* apply deafen to all incoming audio elements whenever it toggles */
+  useEffect(() => {
+    audioContainerRef.current
+      ?.querySelectorAll("audio")
+      .forEach((el) => {
+        (el as HTMLAudioElement).muted = isDeafened;
+      });
+  }, [isDeafened]);
 
   const ringR = 46;
   const ringC = 2 * Math.PI * ringR;
@@ -292,7 +313,16 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
                   key={rider.riderId}
                   name={rider.name}
                   isSelf={rider.riderId === myRiderId}
-                  muted={rider.riderId === myRiderId ? isMuted : false}
+                  muted={
+                    rider.riderId === myRiderId
+                      ? isMuted
+                      : !!rider.muted
+                  }
+                  deafened={
+                    rider.riderId === myRiderId
+                      ? isDeafened
+                      : !!rider.deafened
+                  }
                   speaking={speakingPeerIds.has(rider.peerId)}
                   micLevel={rider.riderId === myRiderId ? micLevel : 0}
                 />
@@ -458,7 +488,10 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
         riderName={riderName}
         open={showMusic}
         onClose={() => setShowMusic(false)}
-        duck={speakingPeerIds.size > 0}
+        duck={
+          speakingPeerIds.size > 0 ||
+          (!isMuted && !micDenied && micLevel > 0.25)
+        }
       />
 
       {/* chat overlay */}
@@ -625,6 +658,23 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
             <circle cx="18" cy="19" r="3" />
             <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
             <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+          </svg>
+        </button>
+
+        {/* deafen toggle */}
+        <button
+          onClick={toggleDeafen}
+          className={`touch-target w-12 h-12 rounded-full transition-colors shrink-0 ${
+            isDeafened
+              ? "bg-red-600 text-white"
+              : "bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)]"
+          }`}
+          aria-label={isDeafened ? "Undeafen" : "Deafen"}
+          aria-pressed={isDeafened}
+        >
+          <svg viewBox="0 0 24 24" className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 14v5a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1H4a3 3 0 0 1 0-6 7 7 0 0 1 14 0 3 3 0 0 1 0 6h-2a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-5" />
+            {isDeafened && <line x1="3" y1="3" x2="21" y2="21" />}
           </svg>
         </button>
 

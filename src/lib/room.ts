@@ -10,6 +10,7 @@ import {
   query,
   limitToLast,
   orderByChild,
+  update,
 } from "firebase/database";
 import { db } from "./firebase";
 
@@ -47,6 +48,10 @@ export interface RiderData {
   peerId: string;
   name: string;
   lastSeen: number;
+  /* true while the rider has muted their mic (shown on their tile) */
+  muted?: boolean;
+  /* true while the rider has deafened (silenced incoming audio) */
+  deafened?: boolean;
   location?: RiderLocation;
 }
 
@@ -55,11 +60,31 @@ export interface RiderData {
 export async function writePresence(
   roomId: string,
   riderId: string,
-  data: { peerId: string; name: string }
+  data: { peerId: string; name: string; muted?: boolean; deafened?: boolean }
 ): Promise<void> {
   const riderRef = dbRef(db, `rooms/${roomId}/riders/${riderId}`);
   await set(riderRef, { ...data, lastSeen: Date.now() });
   onDisconnect(riderRef).remove();
+}
+
+/* persists a mic-mute toggle so other riders see the muted badge */
+export async function setRiderMuted(
+  roomId: string,
+  riderId: string,
+  muted: boolean
+): Promise<void> {
+  const riderRef = dbRef(db, `rooms/${roomId}/riders/${riderId}`);
+  await update(riderRef, { muted, lastSeen: Date.now() });
+}
+
+/* persists a deafen toggle so other riders see the deafened badge */
+export async function setRiderDeafened(
+  roomId: string,
+  riderId: string,
+  deafened: boolean
+): Promise<void> {
+  const riderRef = dbRef(db, `rooms/${roomId}/riders/${riderId}`);
+  await update(riderRef, { deafened, lastSeen: Date.now() });
 }
 
 /* explicit removal (used during intentional leave) */
