@@ -8,8 +8,13 @@ import ChatPanel from "@/components/ChatPanel";
 import { usePeerConnection } from "@/hooks/usePeerConnection";
 import { useAuth } from "@/hooks/useAuth";
 import type { AppUser } from "@/hooks/useAuth";
-import { subscribeDestination, removeDestination, subscribeMusicState } from "@/lib/room";
-import type { Destination, MusicState } from "@/lib/room";
+import {
+  subscribeDestination,
+  removeDestination,
+  subscribeMusicState,
+  subscribeMessages,
+} from "@/lib/room";
+import type { Destination, MusicState, ChatMessage } from "@/lib/room";
 
 const RideMap = dynamic(() => import("@/components/RideMap"), {
   ssr: false,
@@ -130,6 +135,14 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
   const [destination, setDestination] = useState<Destination | null>(null);
   const [music, setMusic] = useState<MusicState | null>(null);
   const [showDestinationPicker, setShowDestinationPicker] = useState(false);
+  const [noiseFilter, setNoiseFilter] = useState(false);
+
+  /* chat notifications: unread badge + single latest-message toast */
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [chatToast, setChatToast] = useState<ChatMessage | null>(null);
+  const lastSeenRef = useRef<number>(Date.now());
+  const toastTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     return subscribeDestination(roomId, setDestination);
@@ -137,6 +150,10 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
 
   useEffect(() => {
     return subscribeMusicState(roomId, setMusic);
+  }, [roomId]);
+
+  useEffect(() => {
+    return subscribeMessages(roomId, setMessages);
   }, [roomId]);
 
   const riderName =
@@ -162,7 +179,33 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
     roomId,
     riderId: user.uid,
     riderName,
+    noiseFilter,
   });
+
+  useEffect(() => {
+    if (showChat) {
+      /* opening chat clears everything */
+      lastSeenRef.current = Date.now();
+      setUnreadCount(0);
+      setChatToast(null);
+      return;
+    }
+    const newOnes = messages.filter(
+      (m) => m.timestamp > lastSeenRef.current && m.riderId !== myRiderId
+    );
+    if (newOnes.length === 0) return;
+    setUnreadCount(newOnes.length);
+    /* one quiet toast with the latest message only; auto-hides */
+    setChatToast(newOnes[newOnes.length - 1]);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setChatToast(null), 4500);
+  }, [messages, showChat, myRiderId]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   const audioContainerRef = useRef<HTMLDivElement>(null);
 
@@ -232,17 +275,43 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
   }
 
   return (
-    <main className="flex flex-col min-h-dvh bg-[var(--background)]">
+    <main className="relative flex flex-col min-h-dvh bg-[var(--background)]">
       {/* header — tap anywhere to switch between tiles and map */}
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setViewMode(viewMode === "tiles" ? "map" : viewMode === "map" ? "tiles" : "map")}
-        className="flex items-center justify-between w-full px-6 py-4 active:bg-[var(--surface)] transition-colors"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            setViewMode(viewMode === "tiles" ? "map" : viewMode === "map" ? "tiles" : "map");
+          }
+        }}
+        className="flex items-center justify-between w-full px-6 py-4 active:bg-[var(--surface)] transition-colors cursor-pointer"
         aria-label={viewMode === "tiles" ? "Switch to map" : "Switch to tiles"}
       >
         <span className="text-sm text-[var(--muted)] font-mono">
           {roomId}
         </span>
         <span className="flex items-center gap-2">
+          {/* noise filter toggle */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setNoiseFilter((v) => !v);
+            }}
+            className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
+              noiseFilter
+                ? "text-[var(--accent)] bg-[var(--accent)]/15"
+                : "text-[var(--muted)]"
+            }`}
+            aria-label={noiseFilter ? "Disable noise filter" : "Enable noise filter"}
+            title={noiseFilter ? "Noise filter on (cuts engine/wind rumble)" : "Noise filter off"}
+          >
+            <svg viewBox="0 0 24 24" className="w-4.5 h-4.5 w-[18px] h-[18px]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12h2l2-6 3 12 3-9 2 5 2-2h4" />
+              {!noiseFilter && <line x1="3" y1="3" x2="21" y2="21" />}
+            </svg>
+          </button>
           {/* current view indicator */}
           <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted)]">
             {viewMode === "tiles" ? "Tiles" : viewMode === "map" ? "Map" : "List"}
@@ -251,7 +320,7 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
             {riderCount} rider{riderCount > 1 ? "s" : ""}
           </span>
         </span>
-      </button>
+      </div>
 
       {/* reconnecting banner */}
       {callStatus === "reconnecting" && (
@@ -466,10 +535,6 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
         riderName={riderName}
         open={showMusic}
         onClose={() => setShowMusic(false)}
-        duck={
-          speakingPeerIds.size > 0 ||
-          (!isMuted && !micDenied && micLevel > 0.25)
-        }
       />
 
       {/* chat overlay */}
@@ -526,6 +591,29 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
         </div>
       )}
 
+      {/* chat message toast (auto-dismisses; tap to open chat) */}
+      {!showChat && chatToast && (
+        <button
+          onClick={() => setShowChat(true)}
+          className="mx-6 mb-1 flex items-center gap-2.5 px-4 py-2.5 rounded-2xl bg-[var(--surface)] border border-[var(--border)] shadow-lg text-left active:bg-[var(--border)] transition-colors"
+        >
+          <span className="w-7 h-7 rounded-full bg-[var(--accent)]/15 flex items-center justify-center shrink-0">
+            <svg viewBox="0 0 24 24" className="w-4 h-4 text-[var(--accent)]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+          </span>
+          <span className="flex-1 min-w-0">
+            <span className="block text-xs font-semibold truncate">
+              {chatToast.riderName}
+              {unreadCount > 1 && (
+                <span className="font-normal text-[var(--muted)]"> +{unreadCount - 1} more</span>
+              )}
+            </span>
+            <span className="block text-xs text-[var(--muted)] truncate">{chatToast.text}</span>
+          </span>
+        </button>
+      )}
+
       {/* now-playing chip */}
       {music && !showMusic && (
         <button
@@ -545,11 +633,11 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
       )}
 
       {/* bottom control bar */}
-      <div className="flex items-center justify-center gap-3 sm:gap-5 px-3 sm:px-6 py-4 sm:py-5 border-t border-[var(--border)]">
+      <div className="flex items-center justify-center flex-wrap gap-1.5 sm:gap-5 px-2 sm:px-6 py-3 sm:py-5 border-t border-[var(--border)]">
         {/* view toggle: direct tiles ↔ map */}
         <button
           onClick={() => setViewMode(viewMode === "tiles" ? "map" : "tiles")}
-          className={`touch-target w-12 sm:w-14 h-12 sm:h-14 rounded-xl sm:rounded-2xl transition-colors shrink-0 ${
+          className={`touch-target w-10 h-10 sm:w-14 sm:h-14 rounded-xl sm:rounded-2xl transition-colors shrink-0 ${
             viewMode !== "tiles"
               ? "bg-[var(--accent)] text-[var(--background)]"
               : "bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)]"
@@ -572,11 +660,11 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
         </button>
 
         {/* mute toggle */}
-        <div className="relative flex items-center justify-center w-[68px] h-[68px] sm:w-[76px] sm:h-[76px] shrink-0">
+        <div className="relative flex items-center justify-center w-[64px] h-[64px] sm:w-[76px] sm:h-[76px] shrink-0">
           <button
             onClick={toggleMute}
             disabled={isDeafened}
-            className={`touch-target w-14 sm:w-16 h-14 sm:h-16 rounded-full transition-colors ${
+            className={`touch-target w-12 h-12 sm:w-16 sm:h-16 rounded-full transition-colors ${
               isMuted
                 ? "bg-red-600 text-white"
                 : "bg-[var(--accent)] text-[var(--background)]"
@@ -615,7 +703,7 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
         {/* share */}
         <button
           onClick={() => setShowShare(true)}
-          className="touch-target w-12 h-12 rounded-full bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)] transition-colors shrink-0"
+          className="touch-target w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)] transition-colors shrink-0"
           aria-label="Share ride"
         >
           <svg viewBox="0 0 24 24" className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -630,7 +718,7 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
         {/* deafen toggle */}
         <button
           onClick={toggleDeafen}
-          className={`touch-target w-12 h-12 rounded-full transition-colors shrink-0 ${
+          className={`touch-target w-10 h-10 sm:w-12 sm:h-12 rounded-full transition-colors shrink-0 ${
             isDeafened
               ? "bg-red-600 text-white"
               : "bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)]"
@@ -647,7 +735,7 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
         {/* music */}
         <button
           onClick={() => setShowMusic(true)}
-          className={`touch-target w-12 h-12 rounded-full transition-colors shrink-0 ${
+          className={`touch-target w-10 h-10 sm:w-12 sm:h-12 rounded-full transition-colors shrink-0 ${
             music
               ? "bg-[var(--accent)] text-[var(--background)]"
               : "bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)]"
@@ -664,18 +752,23 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
         {/* chat */}
         <button
           onClick={() => setShowChat(true)}
-          className="touch-target w-12 h-12 rounded-full bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)] transition-colors shrink-0"
-          aria-label="Open chat"
+          className="relative touch-target w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)] transition-colors shrink-0"
+          aria-label={`Open chat${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
         >
           <svg viewBox="0 0 24 24" className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
           </svg>
+          {unreadCount > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
+              {unreadCount > 9 ? "9+" : unreadCount}
+            </span>
+          )}
         </button>
 
         {/* leave */}
         <button
           onClick={() => router.push("/")}
-          className="touch-target w-12 h-12 rounded-full bg-red-600 text-white transition-colors shrink-0"
+          className="touch-target w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-red-600 text-white transition-colors shrink-0"
           aria-label="Leave ride"
         >
           <svg viewBox="0 0 24 24" className="w-5 h-5 mx-auto" fill="currentColor">

@@ -27,12 +27,7 @@ interface Props {
   riderName: string;
   open: boolean;
   onClose: () => void;
-  /* true while someone is talking on the intercom — ducks the music */
-  duck?: boolean;
 }
-
-/* fraction of the user's volume to duck to while someone speaks */
-const DUCK_FACTOR = 0.25;
 
 /* minimal typing for the YouTube IFrame API */
 interface YTPlayer {
@@ -70,6 +65,24 @@ declare global {
 const RESYNC_THRESHOLD_SEC = 3;
 const HEARTBEAT_MS = 5000;
 const CONTROLLER_STALE_MS = 12000;
+
+/* optional YouTube Data API key enables in-panel search (free tier:
+   100 searches/day).  Falls back to link-only when unset. */
+const YT_API_KEY = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY || "";
+
+interface SearchResult {
+  videoId: string;
+  title: string;
+  channel: string;
+}
+
+/* YouTube API titles contain HTML entities (&#39; etc.) */
+function decodeEntities(text: string): string {
+  if (typeof document === "undefined" || !text.includes("&")) return text;
+  const el = document.createElement("textarea");
+  el.innerHTML = text;
+  return el.value;
+}
 
 /* load the IFrame API script once; resolves with the YT namespace */
 function loadYTApi(): Promise<NonNullable<Window["YT"]>> {
@@ -155,20 +168,20 @@ function formatTime(totalSec: number): string {
   return `${m}:${String(s % 60).padStart(2, "0")}`;
 }
 
-export default function MusicPanel({
-  roomId,
-  riderId,
-  riderName,
-  open,
-  onClose,
-  duck = false,
-}: Props) {
+export default function MusicPanel({ roomId, riderId, riderName, open, onClose }: Props) {
   const [musicState, setMusicState] = useState<MusicState | null>(null);
   const [queue, setQueue] = useState<MusicQueueItem[]>([]);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  /* YouTube search (default tab) */
+  const [searchMode, setSearchMode] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [playerReady, setPlayerReady] = useState(false);
+  const [playerState, setPlayerState] = useState(-1);
   const [localMuted, setLocalMuted] = useState(false);
   const [clockSec, setClockSec] = useState(0);
   /* per-user local volume (0–100), persisted per rider on this device */
@@ -201,6 +214,14 @@ export default function MusicPanel({
 
   useEffect(() => subscribeMusicState(roomId, setMusicState), [roomId]);
   useEffect(() => subscribeMusicQueue(roomId, setQueue), [roomId]);
+
+  /* clear stale search results when the query is emptied */
+  useEffect(() => {
+    if (searchQuery.trim() === "") {
+      setSearchResults(null);
+      setSearchError(null);
+    }
+  }, [searchQuery]);
 
   /* ---------------- publishing ---------------- */
 
@@ -273,10 +294,14 @@ export default function MusicPanel({
             onReady: () => {
               playerRef.current = player;
               setPlayerReady(true);
-              if (player) playerStateRef.current = player.getPlayerState();
+              if (player) {
+                playerStateRef.current = player.getPlayerState();
+                setPlayerState(playerStateRef.current);
+              }
             },
             onStateChange: (event: { data: number }) => {
               playerStateRef.current = event.data;
+              setPlayerState(event.data);
               /* YT.PlayerState: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering */
               if (event.data === 0 && controllerRef.current) {
                 advanceRef.current();
@@ -411,6 +436,45 @@ export default function MusicPanel({
 
   /* ---------------- actions ---------------- */
 
+  /* shared add path: start playing immediately when nothing is on,
+     otherwise append to the queue */
+  async function addTrack(track: {
+    kind: MusicKind;
+    videoId?: string;
+    listId?: string;
+    title: string;
+  }) {
+    const base = {
+      kind: track.kind,
+      videoId: track.videoId,
+      listId: track.listId,
+      title: track.title,
+      addedBy: riderId,
+      addedByName: riderName,
+    };
+    try {
+      if (!musicState || (!musicState.videoId && !musicState.listId)) {
+        /* nothing playing — start it immediately */
+        const now = Date.now();
+        lastPubRef.current = now;
+        await writeMusicState(roomId, {
+          ...base,
+          isPlaying: true,
+          positionSec: 0,
+          updatedAt: now,
+          controllerId: riderId,
+          controllerName: riderName,
+        });
+      } else {
+        await pushMusicQueue(roomId, base);
+      }
+    } catch (err) {
+      console.error("Music write failed:", err);
+      lastPubRef.current = null;
+      setError("Couldn't save to the room — check your connection and try again");
+    }
+  }
+
   async function handleAdd() {
     const parsed = parseYouTubeUrl(input);
     if (!parsed) {
@@ -432,37 +496,41 @@ export default function MusicPanel({
     } catch {
       /* keep fallback title */
     }
-    const base = {
-      kind: parsed.kind,
-      videoId: parsed.videoId,
-      listId: parsed.listId,
-      title,
-      addedBy: riderId,
-      addedByName: riderName,
-    };
+    await addTrack({ ...parsed, title });
+    setInput("");
+    setAdding(false);
+  }
+
+  async function handleSearch() {
+    if (!YT_API_KEY || !searchQuery.trim()) return;
+    setSearching(true);
+    setSearchError(null);
     try {
-      if (!musicState || (!musicState.videoId && !musicState.listId)) {
-        /* nothing playing — start it immediately */
-        const now = Date.now();
-        lastPubRef.current = now;
-        await writeMusicState(roomId, {
-          ...base,
-          isPlaying: true,
-          positionSec: 0,
-          updatedAt: now,
-          controllerId: riderId,
-          controllerName: riderName,
-        });
-      } else {
-        await pushMusicQueue(roomId, base);
-      }
-      setInput("");
-    } catch (err) {
-      console.error("Music write failed:", err);
-      lastPubRef.current = null;
-      setError("Couldn't save to the room — check your connection and try again");
+      const res = await fetch(
+        `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=10&q=${encodeURIComponent(
+          searchQuery.trim()
+        )}&key=${YT_API_KEY}`
+      );
+      if (!res.ok) throw new Error(`search failed (${res.status})`);
+      const data = (await res.json()) as {
+        items?: Array<{
+          id?: { videoId?: string };
+          snippet?: { title?: string; channelTitle?: string };
+        }>;
+      };
+      const items: SearchResult[] = (data.items ?? [])
+        .filter((it) => it.id?.videoId)
+        .map((it) => ({
+          videoId: it.id!.videoId!,
+          title: decodeEntities(it.snippet?.title ?? "Unknown title"),
+          channel: decodeEntities(it.snippet?.channelTitle ?? ""),
+        }));
+      setSearchResults(items);
+      if (items.length === 0) setSearchError("No results");
+    } catch {
+      setSearchError("Search failed — check the API key or try again");
     } finally {
-      setAdding(false);
+      setSearching(false);
     }
   }
 
@@ -494,37 +562,16 @@ export default function MusicPanel({
     removeMusicState(roomId);
   }
 
-  /* apply the rider's local volume to the player, ramping smoothly and
-     ducking to DUCK_FACTOR of the set level while someone is talking */
+  /* apply the rider's local volume to the player whenever it changes */
   useEffect(() => {
     const p = playerRef.current;
     if (!p || !playerReady) return;
-    const target = localMuted
-      ? 0
-      : Math.round(volume * (duck ? DUCK_FACTOR : 1));
-
-    let timer: number;
-    const step = () => {
-      const cur = p.getVolume?.() ?? 0;
-      const diff = target - cur;
-      if (Math.abs(diff) <= 5) {
-        try {
-          p.setVolume(target);
-        } catch {
-          /* ignore */
-        }
-        return;
-      }
-      try {
-        p.setVolume(Math.round(cur + Math.sign(diff) * 7));
-      } catch {
-        /* ignore */
-      }
-      timer = window.setTimeout(step, 70);
-    };
-    step();
-    return () => clearTimeout(timer);
-  }, [volume, duck, localMuted, playerReady]);
+    try {
+      p.setVolume(volume);
+    } catch {
+      /* ignore */
+    }
+  }, [volume, playerReady]);
 
   function setVolume(v: number) {
     const clamped = Math.min(100, Math.max(0, Math.round(v)));
@@ -558,14 +605,46 @@ export default function MusicPanel({
   const needsJoinTap =
     playerReady &&
     !!musicState?.isPlaying &&
-    (playerStateRef.current === -1 || playerStateRef.current === 2);
+    (playerState === -1 || playerState === 2);
+
+  /* resume playback after an autoplay block.  A direct playVideo() from
+     the tap usually works; if the browser still refuses, start muted
+     (always allowed) and let the rider unmute with the volume control. */
+  function handleJoinPlayback() {
+    const p = playerRef.current;
+    if (!p) return;
+    p.playVideo();
+    window.setTimeout(() => {
+      const st = p.getPlayerState?.() ?? -1;
+      if (st !== 1 && st !== 3) {
+        try {
+          p.mute();
+        } catch {
+          /* ignore */
+        }
+        p.playVideo();
+        setLocalMuted(true);
+      }
+    }, 400);
+  }
 
   const isPlaylistTrack = musicState?.kind === "playlist";
 
   return (
     <>
-      {/* permanent hidden player mount — lives outside the overlay so
-          playback continues when the panel is closed */}
+      <style jsx global>{`
+        /* the YouTube API replaces the #music-yt-mount div with an iframe
+           that carries the same id — size the iframe itself */
+        iframe#music-yt-mount,
+        div#music-yt-mount {
+          width: 100% !important;
+          height: 100% !important;
+          border: 0;
+        }
+      `}</style>
+
+      {/* hidden player: parked offscreen permanently so the app is
+          audio-only; playback is started via the join-tap button */}
       <div
         aria-hidden
         style={{
@@ -582,10 +661,10 @@ export default function MusicPanel({
         <div id="music-yt-mount" />
       </div>
 
-      {open && (
+      {open ? (
         <div className="absolute inset-0 z-30 flex flex-col bg-[var(--background)]">
           {/* header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)] shrink-0">
             <span className="text-sm font-semibold">Music</span>
             <button
               onClick={onClose}
@@ -599,178 +678,145 @@ export default function MusicPanel({
             </button>
           </div>
 
-          {/* now playing */}
-          <div className="px-4 py-4 border-b border-[var(--border)]">
-            {musicState ? (
-              <div className="flex gap-3 items-center">
-                <div className="w-12 h-12 rounded-lg shrink-0 bg-[var(--surface)] border border-[var(--border)] flex items-center justify-center">
-                  {isPlaylistTrack ? (
-                    <svg viewBox="0 0 24 24" className="w-5 h-5 text-[var(--muted)]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                      <line x1="3" y1="6" x2="21" y2="6" />
-                      <line x1="3" y1="12" x2="21" y2="12" />
-                      <line x1="3" y1="18" x2="15" y2="18" />
-                    </svg>
-                  ) : (
-                    <svg viewBox="0 0 24 24" className="w-5 h-5 text-[var(--muted)]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M9 18V5l12-2v13" />
-                      <circle cx="6" cy="18" r="3" />
-                      <circle cx="18" cy="16" r="3" />
-                    </svg>
+          {/* add music — search first, then paste link */}
+          <div className="px-4 py-3 border-b border-[var(--border)] shrink-0">
+            <div className="flex gap-1 mb-2">
+              <button
+                onClick={() => { setSearchMode(true); setError(null); }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  searchMode
+                    ? "bg-[var(--accent)] text-[var(--background)]"
+                    : "text-[var(--muted)] active:bg-[var(--border)]"
+                }`}
+              >
+                Search
+              </button>
+              <button
+                onClick={() => { setSearchMode(false); setSearchError(null); }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  !searchMode
+                    ? "bg-[var(--accent)] text-[var(--background)]"
+                    : "text-[var(--muted)] active:bg-[var(--border)]"
+                }`}
+              >
+                Paste link
+              </button>
+            </div>
+
+            {searchMode ? (
+              !YT_API_KEY ? (
+                <p className="text-xs text-[var(--muted)] leading-relaxed">
+                  Search needs a free YouTube API key. Ask the app owner to add{" "}
+                  <code className="text-[var(--foreground)]">NEXT_PUBLIC_YOUTUBE_API_KEY</code>{" "}
+                  to the environment — pasting links works without it.
+                </p>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                      placeholder="Search YouTube for a song…"
+                      className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-[var(--surface)] border border-[var(--border)] text-sm text-[var(--foreground)] placeholder:text-[var(--muted)] outline-none focus:border-[var(--accent)] transition-colors"
+                    />
+                    <button
+                      onClick={handleSearch}
+                      disabled={searching || !searchQuery.trim()}
+                      className="shrink-0 px-4 py-2 rounded-xl bg-[var(--accent)] text-[var(--background)] text-sm font-semibold disabled:opacity-40 active:opacity-80 transition-opacity"
+                    >
+                      {searching ? "…" : "Find"}
+                    </button>
+                  </div>
+                  {searchError && (
+                    <p className="text-xs text-red-400 mt-1.5 px-1">{searchError}</p>
                   )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{musicState.title}</p>
-                  <p className="text-xs text-[var(--muted)] mt-0.5 truncate">
-                    {isPlaylistTrack ? "Playlist · " : ""}
-                    {formatTime(clockSec)}
-                    {" · "}
-                    {musicState.isPlaying ? "Playing" : "Paused"}
-                    {isController ? " · you control" : ` · ${musicState.controllerName} controls`}
-                  </p>
-                </div>
-              </div>
+                  {searchResults && searchResults.length > 0 && (
+                    <div className="mt-2 max-h-44 overflow-y-auto space-y-1 pr-1">
+                      {searchResults.map((r) => (
+                        <button
+                          key={r.videoId}
+                          onClick={() =>
+                            addTrack({ kind: "video", videoId: r.videoId, title: r.title })
+                          }
+                          className="w-full flex items-center gap-2 p-2 rounded-lg text-left active:bg-[var(--border)] transition-colors"
+                        >
+                          <svg viewBox="0 0 24 24" className="w-4 h-4 shrink-0 text-[var(--muted)]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                          </svg>
+                          <span className="flex-1 min-w-0">
+                            <span className="block text-xs font-medium truncate">{r.title}</span>
+                            {r.channel && (
+                              <span className="block text-[11px] text-[var(--muted)] truncate">{r.channel}</span>
+                            )}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )
             ) : (
-              <p className="text-sm text-[var(--muted)] text-center py-2">
-                Nothing playing — add a YouTube link below
-              </p>
-            )}
-
-            {needsJoinTap && (
-              <button
-                onClick={() => playerRef.current?.playVideo()}
-                className="w-full mt-3 py-2 rounded-lg text-xs font-medium bg-yellow-900/40 border border-yellow-700 text-yellow-200 active:opacity-80 transition-opacity"
-              >
-                Tap to join playback (browser blocked autoplay)
-              </button>
-            )}
-
-            {/* controls */}
-            <div className="flex items-center justify-center gap-3 mt-3">
-              <button
-                onClick={handleToggleMute}
-                disabled={!musicState || !playerReady}
-                className="w-11 h-11 rounded-full bg-[var(--surface)] border border-[var(--border)] flex items-center justify-center disabled:opacity-40 active:bg-[var(--border)] transition-colors"
-                aria-label={localMuted ? "Unmute for me" : "Mute for me"}
-              >
-                <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                  {localMuted ? (
-                    <>
-                      <line x1="23" y1="9" x2="17" y2="15" />
-                      <line x1="17" y1="9" x2="23" y2="15" />
-                    </>
-                  ) : (
-                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                  )}
-                </svg>
-              </button>
-              <button
-                onClick={handlePlayPause}
-                disabled={!musicState || !playerReady}
-                className="w-14 h-14 rounded-full bg-[var(--accent)] text-[var(--background)] flex items-center justify-center disabled:opacity-40 active:opacity-80 transition-opacity"
-                aria-label={musicState?.isPlaying ? "Pause" : "Play"}
-              >
-                {musicState?.isPlaying ? (
-                  <svg viewBox="0 0 24 24" className="w-6 h-6" fill="currentColor">
-                    <rect x="6" y="4" width="4" height="16" rx="1" />
-                    <rect x="14" y="4" width="4" height="16" rx="1" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" className="w-6 h-6" fill="currentColor">
-                    <polygon points="6 3 21 12 6 21" />
-                  </svg>
-                )}
-              </button>
-              <button
-                onClick={handleSkip}
-                disabled={!musicState || !playerReady}
-                className="w-11 h-11 rounded-full bg-[var(--surface)] border border-[var(--border)] flex items-center justify-center disabled:opacity-40 active:bg-[var(--border)] transition-colors"
-                aria-label="Skip to next"
-              >
-                <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="5 4 15 12 5 20 5 4" fill="currentColor" />
-                  <line x1="19" y1="5" x2="19" y2="19" />
-                </svg>
-              </button>
-            </div>
-            {/* per-user volume */}
-            <div className="flex items-center gap-2 mt-3 px-1" title="Volume only affects your device; auto-ducked while someone talks">
-              <svg viewBox="0 0 24 24" className="w-4 h-4 shrink-0 text-[var(--muted)]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" />
-                {volume > 0 && !localMuted ? (
-                  <>
-                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                    {volume > 60 && <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />}
-                  </>
-                ) : (
-                  <>
-                    <line x1="23" y1="9" x2="17" y2="15" />
-                    <line x1="17" y1="9" x2="23" y2="15" />
-                  </>
-                )}
-              </svg>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={volume}
-                onChange={(e) => setVolume(Number(e.currentTarget.value))}
-                className="flex-1 accent-[var(--accent)]"
-                aria-label="Music volume (only affects your device)"
-              />
-              <span className="text-[11px] text-[var(--muted)] w-9 text-right shrink-0">
-                {volume}%
-              </span>
-            </div>
-            {duck && musicState?.isPlaying && !localMuted && (
-              <p className="text-[11px] text-[var(--muted)] text-center mt-1">
-                Ducking while someone talks…
-              </p>
-            )}
-
-            {musicState && (
-              <button
-                onClick={handleStop}
-                className="w-full mt-3 py-1.5 rounded-lg text-xs text-[var(--muted)] border border-[var(--border)] active:bg-[var(--border)] transition-colors"
-              >
-                Stop music
-              </button>
+              <>
+                <div className="flex items-center gap-2">
+                  <input
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+                    placeholder="Paste a YouTube video or playlist link…"
+                    className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-[var(--surface)] border border-[var(--border)] text-sm text-[var(--foreground)] placeholder:text-[var(--muted)] outline-none focus:border-[var(--accent)] transition-colors"
+                  />
+                  <button
+                    onClick={handleAdd}
+                    disabled={adding || !input.trim()}
+                    className="shrink-0 px-4 py-2 rounded-xl bg-[var(--accent)] text-[var(--background)] text-sm font-semibold disabled:opacity-40 active:opacity-80 transition-opacity"
+                  >
+                    {adding ? "…" : "Add"}
+                  </button>
+                </div>
+                {error && <p className="text-xs text-red-400 mt-1.5 px-1">{error}</p>}
+              </>
             )}
           </div>
 
-          {/* add link */}
-          <div className="px-4 py-3 border-b border-[var(--border)]">
-            <div className="flex items-center gap-2">
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-                placeholder="Paste a YouTube video or playlist link…"
-                className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-[var(--surface)] border border-[var(--border)] text-sm text-[var(--foreground)] placeholder:text-[var(--muted)] outline-none focus:border-[var(--accent)] transition-colors"
-              />
-              <button
-                onClick={handleAdd}
-                disabled={adding || !input.trim()}
-                className="shrink-0 px-4 py-2 rounded-xl bg-[var(--accent)] text-[var(--background)] text-sm font-semibold disabled:opacity-40 active:opacity-80 transition-opacity"
-              >
-                {adding ? "…" : "Add"}
-              </button>
-            </div>
-            {error && <p className="text-xs text-red-400 mt-1.5 px-1">{error}</p>}
-          </div>
+          {/* scrollable: now playing video, then Up next below the fold */}
+          <div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
+            {musicState ? (
+              <>
+                {needsJoinTap && (
+                  <button
+                    onClick={handleJoinPlayback}
+                    className="w-full mt-3 py-2 rounded-lg text-xs font-medium bg-yellow-900/40 border border-yellow-700 text-yellow-200 active:opacity-80 transition-opacity"
+                  >
+                    Tap to join playback (browser blocked autoplay)
+                  </button>
+                )}
 
-          {/* queue */}
-          <div className="flex-1 overflow-y-auto px-4 py-3">
-            <p className="text-xs font-medium uppercase tracking-wider text-[var(--muted)] px-1 pb-2">
+                <p className="text-[11px] text-[var(--muted)] mt-2 px-1 truncate">
+                  {isPlaylistTrack ? "Playlist · " : ""}
+                  {formatTime(clockSec)}
+                  {" · "}
+                  {musicState.isPlaying ? "Playing" : "Paused"}
+                  {isController ? " · you control" : ` · ${musicState.controllerName} controls`}
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-[var(--muted)] text-center py-6">
+                Nothing playing — search or paste a YouTube link above
+              </p>
+            )}
+
+            {/* up next (revealed by scrolling) */}
+            <p className="text-xs font-medium uppercase tracking-wider text-[var(--muted)] px-1 pt-4 pb-2">
               Up next ({queue.length})
             </p>
             {queue.length === 0 ? (
-              <p className="text-sm text-[var(--muted)] text-center pt-4">
+              <p className="text-sm text-[var(--muted)] text-center pb-2">
                 Queue is empty
               </p>
             ) : (
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 pb-2">
                 {queue.map((item, i) => (
                   <div
                     key={item.id ?? `${item.videoId ?? item.listId ?? "item"}-${i}`}
@@ -817,8 +863,112 @@ export default function MusicPanel({
               </div>
             )}
           </div>
+
+          {/* bottom player bar (Spotify-style) */}
+          <div className="shrink-0 border-t border-[var(--border)] bg-[var(--background)] px-4 pt-3 pb-3">
+            {/* volume + stop */}
+            <div className="flex items-center gap-2" title="Volume only affects your device">
+              <button
+                onClick={handleToggleMute}
+                disabled={!musicState || !playerReady}
+                className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-[var(--muted)] disabled:opacity-40 active:bg-[var(--border)] transition-colors"
+                aria-label={localMuted ? "Unmute for me" : "Mute for me"}
+              >
+                <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" />
+                  {volume > 0 && !localMuted ? (
+                    <>
+                      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                      {volume > 60 && <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />}
+                    </>
+                  ) : (
+                    <>
+                      <line x1="23" y1="9" x2="17" y2="15" />
+                      <line x1="17" y1="9" x2="23" y2="15" />
+                    </>
+                  )}
+                </svg>
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={volume}
+                onChange={(e) => setVolume(Number(e.currentTarget.value))}
+                className="flex-1 accent-[var(--accent)]"
+                aria-label="Music volume (only affects your device)"
+              />
+              <span className="text-[11px] text-[var(--muted)] w-9 text-right shrink-0">
+                {volume}%
+              </span>
+              <button
+                onClick={handleStop}
+                disabled={!musicState}
+                className="shrink-0 text-[11px] text-[var(--muted)] border border-[var(--border)] rounded-lg px-2.5 py-1.5 disabled:opacity-40 active:bg-[var(--border)] transition-colors"
+              >
+                Stop
+              </button>
+            </div>
+
+            <div className="flex items-center gap-3 mt-2">
+              <div className="w-11 h-11 rounded-lg shrink-0 bg-[var(--surface)] border border-[var(--border)] flex items-center justify-center">
+                {isPlaylistTrack ? (
+                  <svg viewBox="0 0 24 24" className="w-5 h-5 text-[var(--muted)]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <line x1="3" y1="6" x2="21" y2="6" />
+                    <line x1="3" y1="12" x2="21" y2="12" />
+                    <line x1="3" y1="18" x2="15" y2="18" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" className="w-5 h-5 text-[var(--muted)]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 18V5l12-2v13" />
+                    <circle cx="6" cy="18" r="3" />
+                    <circle cx="18" cy="16" r="3" />
+                  </svg>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">
+                  {musicState?.title ?? "Nothing playing"}
+                </p>
+                <p className="text-[11px] text-[var(--muted)] truncate">
+                  {musicState
+                    ? `${musicState.isPlaying ? "Playing" : "Paused"}${isController ? " · you control" : ` · ${musicState.controllerName} controls`}`
+                    : "Search or paste a link to get started"}
+                </p>
+              </div>
+              <button
+                onClick={handleSkip}
+                disabled={!musicState || !playerReady}
+                className="w-10 h-10 shrink-0 rounded-full flex items-center justify-center text-[var(--foreground)] disabled:opacity-40 active:bg-[var(--border)] transition-colors"
+                aria-label="Skip to next"
+              >
+                <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="5 4 15 12 5 20 5 4" fill="currentColor" />
+                  <line x1="19" y1="5" x2="19" y2="19" />
+                </svg>
+              </button>
+              <button
+                onClick={handlePlayPause}
+                disabled={!musicState || !playerReady}
+                className="w-12 h-12 shrink-0 rounded-full bg-[var(--accent)] text-[var(--background)] flex items-center justify-center disabled:opacity-40 active:opacity-80 transition-opacity"
+                aria-label={musicState?.isPlaying ? "Pause" : "Play"}
+              >
+                {musicState?.isPlaying ? (
+                  <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
+                    <rect x="6" y="4" width="4" height="16" rx="1" />
+                    <rect x="14" y="4" width="4" height="16" rx="1" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
+                    <polygon points="6 3 21 12 6 21" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
-      )}
+      ) : null}
     </>
   );
 }

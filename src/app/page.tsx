@@ -53,7 +53,7 @@ export default function Home() {
         </p>
       </div>
 
-      <div className="w-full flex flex-col gap-3 pb-8">
+      <div className="w-full max-w-sm mx-auto flex flex-col gap-3 pb-8">
         {loading ? (
           <div className="h-[52px] flex items-center justify-center text-sm text-[var(--muted)]">
             Loading…

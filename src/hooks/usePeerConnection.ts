@@ -30,6 +30,9 @@ interface UsePeerConnectionOptions {
   roomId: string;
   riderId?: string;
   riderName?: string;
+  /* apply a free local DSP chain (high-pass + compressor) to the
+     outgoing mic audio to cut engine/wind noise */
+  noiseFilter?: boolean;
 }
 
 export interface RemotePeer {
@@ -77,6 +80,7 @@ export function usePeerConnection({
   roomId,
   riderId: authRiderId,
   riderName = "Rider",
+  noiseFilter = false,
 }: UsePeerConnectionOptions) {
   const [remotePeers, setRemotePeers] = useState<RemotePeer[]>([]);
   const [callStatus, setCallStatus] = useState<CallStatus>("connecting");
@@ -100,6 +104,10 @@ export function usePeerConnection({
   const mutedRef = useRef(false);
   /* mirrors isDeafened so presence writes can include the flag */
   const deafenedRef = useRef(false);
+  /* outgoing (optionally filtered) mic stream sent to peers */
+  const outgoingStreamRef = useRef<MediaStream | null>(null);
+  const processedCtxRef = useRef<AudioContext | null>(null);
+  const noiseFilterRef = useRef(noiseFilter);
 
   const riderId = riderIdRef.current;
   const peerId = `${roomId}-${riderId}`;
@@ -117,10 +125,71 @@ export function usePeerConnection({
     setRemotePeers(entries);
   }, []);
 
+  /* build the stream we actually send to peers: the raw mic, or a
+     filtered version (high-pass cuts engine rumble/wind, compressor
+     evens out levels).  Disabling the raw track (mute) silences both. */
+  const buildOutgoingStream = useCallback((): MediaStream | null => {
+    const raw = localStreamRef.current;
+    /* tear down any previous processing context */
+    if (processedCtxRef.current) {
+      try { processedCtxRef.current.close(); } catch { /* ignore */ }
+      processedCtxRef.current = null;
+    }
+    outgoingStreamRef.current = null;
+    if (!raw || raw.getAudioTracks().length === 0 || !noiseFilterRef.current) {
+      outgoingStreamRef.current = raw;
+      return raw;
+    }
+    try {
+      const ctx = new AudioContext();
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      const src = ctx.createMediaStreamSource(raw);
+      const hp = ctx.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = 150;
+      hp.Q.value = 0.7;
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -30;
+      comp.knee.value = 12;
+      comp.ratio.value = 4;
+      comp.attack.value = 0.01;
+      comp.release.value = 0.25;
+      const dest = ctx.createMediaStreamDestination();
+      src.connect(hp);
+      hp.connect(comp);
+      comp.connect(dest);
+      processedCtxRef.current = ctx;
+      outgoingStreamRef.current = dest.stream;
+      return dest.stream;
+    } catch {
+      outgoingStreamRef.current = raw;
+      return raw;
+    }
+  }, []);
+
+  /* rebuild the outgoing stream and hot-swap the track into every live
+     peer connection without dropping calls */
+  const applyOutgoingStream = useCallback(() => {
+    const out = buildOutgoingStream();
+    if (!out) return;
+    const track = out.getAudioTracks()[0] ?? null;
+    connectionsRef.current.forEach((conn) => {
+      try {
+        conn.peerConnection.getSenders().forEach((sender) => {
+          if (sender.track?.kind === "audio") {
+            sender.replaceTrack(track).catch(() => {});
+          }
+        });
+      } catch {
+        /* ignore */
+      }
+    });
+  }, [buildOutgoingStream]);
+
   /* answer an incoming call */
   const answerCall = useCallback(
     (incoming: MediaConnection) => {
-      const stream = localStreamRef.current;
+      const stream = outgoingStreamRef.current ?? localStreamRef.current;
       if (!stream) return;
 
       incoming.answer(stream);
@@ -151,7 +220,7 @@ export function usePeerConnection({
   const callPeer = useCallback(
     (targetPeerId: string) => {
       const peer = peerRef.current;
-      const stream = localStreamRef.current;
+      const stream = outgoingStreamRef.current ?? localStreamRef.current;
       if (!peer || !stream || targetPeerId === peerId) return;
       if (connectionsRef.current.has(targetPeerId)) return;
 
@@ -213,6 +282,7 @@ export function usePeerConnection({
       }
       localStreamRef.current = stream;
       setLocalStream(stream);
+      buildOutgoingStream();
 
       /* --- PeerJS with public cloud broker --- */
       const peer = new Peer(peerId, {
@@ -383,8 +453,20 @@ export function usePeerConnection({
         peerRef.current.destroy();
         peerRef.current = null;
       }
+
+      if (processedCtxRef.current) {
+        try { processedCtxRef.current.close(); } catch { /* ignore */ }
+        processedCtxRef.current = null;
+      }
+      outgoingStreamRef.current = null;
     };
-  }, [roomId, peerId, callPeer, answerCall, syncRemotePeers, riderName, riderId]);
+  }, [roomId, peerId, callPeer, answerCall, syncRemotePeers, riderName, riderId, buildOutgoingStream]);
+
+  /* rebuild + hot-swap the outgoing stream when the filter is toggled */
+  useEffect(() => {
+    noiseFilterRef.current = noiseFilter;
+    if (localStream) applyOutgoingStream();
+  }, [noiseFilter, localStream, applyOutgoingStream, buildOutgoingStream]);
 
   /* ---- location watching (always on while in the ride) ---- */
   useEffect(() => {

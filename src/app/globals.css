@@ -28,7 +28,8 @@
 
 @layer utilities {
   .touch-target {
-    @apply min-h-[52px] min-w-[52px] flex items-center justify-center;
+    @apply min-h-[40px] min-w-[40px] flex items-center justify-center
+           sm:min-h-[52px] sm:min-w-[52px];
   }
 
   .btn-primary {
