@@ -59,40 +59,22 @@ function RiderTile({
   const showLevel = isSelf && !muted && micLevel > 0.03;
   const borderBase = isSelf ? "#22c55e" : (muted ? "#6b7280" : "#3b82f6");
   const borderColor = speaking ? "#22d3ee" : borderBase;
-  const glow = speaking ? "0 0 18px rgba(34, 211, 238, 0.6)" : "none";
-
-  const ringR = 46;
-  const ringC = 2 * Math.PI * ringR;
-  const ringOffset = ringC * (1 - Math.min(micLevel, 1));
+  const glowLevel = showLevel ? micLevel : speaking ? 0.65 : 0;
+  const glowOpacity = 0.3 + glowLevel * 0.7;
+  const glowRadius = 14 + glowLevel * 30;
+  const glow = glowLevel > 0.03
+    ? `0 0 ${glowRadius}px rgba(34, 211, 238, ${glowOpacity}), 0 0 ${glowRadius * 1.8}px rgba(34, 211, 238, ${glowOpacity * 0.45})`
+    : "none";
 
   return (
     <div className="flex flex-col items-center gap-2">
       <div className="relative flex items-center justify-center" style={{ width: 104, height: 104 }}>
-        {/* circular progress ring for mic level */}
-        <svg
-          className="absolute inset-0 -rotate-90 pointer-events-none"
-          width="104" height="104"
-          viewBox="0 0 100 100"
-          style={{ opacity: showLevel ? 1 : 0, transition: "opacity 0.08s" }}
-        >
-          {showLevel && (
-            <circle
-              cx="50" cy="50" r={ringR}
-              fill="none"
-              stroke="#22d3ee"
-              strokeWidth="8"
-              strokeLinecap="round"
-              strokeDasharray={ringC}
-              strokeDashoffset={ringOffset}
-              style={{ filter: "drop-shadow(0 0 4px rgba(34, 211, 238, 0.9))" }}
-            />
-          )}
-        </svg>
         <div
           className="rounded-full shrink-0 w-[94px] h-[94px] flex items-center justify-center text-2xl font-bold text-white"
           style={{
             border: `3px solid ${borderColor}`,
             boxShadow: glow,
+            transition: "box-shadow 80ms ease, border-color 80ms ease",
             background: "#1a1a2e",
           }}
         >
@@ -222,10 +204,6 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
         (el as HTMLAudioElement).muted = isDeafened;
       });
   }, [isDeafened]);
-
-  const ringR = 46;
-  const ringC = 2 * Math.PI * ringR;
-  const ringOffset = ringC * (1 - Math.min(micLevel, 1));
 
   const shareUrl =
     typeof window !== "undefined"
@@ -595,26 +573,6 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
 
         {/* mute toggle */}
         <div className="relative flex items-center justify-center w-[68px] h-[68px] sm:w-[76px] sm:h-[76px] shrink-0">
-          <svg
-            className="absolute inset-0 -rotate-90 pointer-events-none"
-            width="100%" height="100%"
-            viewBox="0 0 100 100"
-            preserveAspectRatio="xMidYMid meet"
-            style={{ opacity: !isMuted && micLevel > 0.03 ? 1 : 0, transition: "opacity 0.08s" }}
-          >
-            {!isMuted && micLevel > 0.03 && (
-              <circle
-                cx="50" cy="50" r="46"
-                fill="none"
-                stroke="#22d3ee"
-                strokeWidth="8"
-                strokeLinecap="round"
-                strokeDasharray={ringC}
-                strokeDashoffset={ringOffset}
-                style={{ filter: "drop-shadow(0 0 4px rgba(34, 211, 238, 0.9))" }}
-              />
-            )}
-          </svg>
           <button
             onClick={toggleMute}
             disabled={isDeafened}
@@ -624,9 +582,10 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
                 : "bg-[var(--accent)] text-[var(--background)]"
             }`}
             style={{
-              boxShadow: isMuted
-                ? "0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1)"
-                : `0 0 ${6 + micLevel * 24}px rgba(34, 211, 238, ${0.2 + micLevel * 0.5}), 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1)`,
+              boxShadow: `${!isMuted && micLevel > 0.03
+                ? `0 0 ${14 + micLevel * 34}px rgba(34, 211, 238, ${0.3 + micLevel * 0.7}), 0 0 ${25 + micLevel * 48}px rgba(34, 211, 238, ${0.15 + micLevel * 0.45}), `
+                : ""}0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1)`,
+              transition: "box-shadow 80ms ease",
             }}
             aria-label={
               isDeafened
