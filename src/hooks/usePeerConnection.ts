@@ -563,7 +563,7 @@ export function usePeerConnection({
     const next = !deafenedRef.current;
     deafenedRef.current = next;
     setIsDeafened(next);
-    if (next) setMicrophoneMuted(true);
+    setMicrophoneMuted(next);
     /* broadcast so other riders' tiles show the deafened badge */
     setRiderDeafened(roomId, riderIdRef.current, next).catch(() => {});
   }, [roomId, setMicrophoneMuted]);
