@@ -253,7 +253,7 @@ export default function RideMap({ riders, myRiderId, destination }: Props) {
             ? "bg-[var(--accent)] text-[var(--background)] border-[var(--accent)]"
             : "bg-[var(--surface)] text-[var(--foreground)] border-[var(--border)]"
         }`}
-        style={{ zIndex: 500 }}
+        style={{ zIndex: 20 }}
       >
         <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="3" fill="currentColor" />
