@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createRoom } from "@/lib/room";
 import { useAuth } from "@/hooks/useAuth";
@@ -20,6 +20,16 @@ export default function Home() {
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
+  const [lastRoom, setLastRoom] = useState<string | null>(null);
+
+  /* offer a one-tap rejoin for the room the rider was last in */
+  useEffect(() => {
+    try {
+      setLastRoom(sessionStorage.getItem("roam_last_room"));
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   async function handleCreate() {
     const roomId = generateRoomId();
@@ -59,9 +69,19 @@ export default function Home() {
             Loading…
           </div>
         ) : user ? (
-          <button onClick={handleCreate} className="btn-primary">
-            Create Ride
-          </button>
+          <>
+            {lastRoom && (
+              <button
+                onClick={() => router.push(`/ride/${lastRoom}/join`)}
+                className="btn-secondary mb-1"
+              >
+                Rejoin last ride · {lastRoom.toUpperCase()}
+              </button>
+            )}
+            <button onClick={handleCreate} className="btn-primary">
+              Create Ride
+            </button>
+          </>
         ) : (
           <div className="w-full flex flex-col gap-2">
             <input

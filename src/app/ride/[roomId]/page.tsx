@@ -128,6 +128,17 @@ export default function RidePage({ params }: Props) {
 
 function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
   const router = useRouter();
+
+  /* remember the room so the home screen can offer a one-tap rejoin
+     after the rider leaves or closes the app */
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("roam_last_room", roomId);
+    } catch {
+      /* ignore */
+    }
+  }, [roomId]);
+
   const [viewMode, setViewMode] = useState<"tiles" | "map" | "list">("tiles");
   const [showShare, setShowShare] = useState(false);
   const [showChat, setShowChat] = useState(false);
@@ -767,12 +778,16 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
 
         {/* leave */}
         <button
-          onClick={() => router.push("/")}
+          onClick={() => {
+            if (window.confirm("Leave the ride?")) router.push("/");
+          }}
           className="touch-target w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-red-600 text-white transition-colors shrink-0"
           aria-label="Leave ride"
         >
-          <svg viewBox="0 0 24 24" className="w-5 h-5 mx-auto" fill="currentColor">
-            <rect x="6" y="6" width="12" height="12" rx="2" />
+          <svg viewBox="0 0 24 24" className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3" />
+            <path d="M16 17l5-5-5-5" />
+            <line x1="21" y1="12" x2="10" y2="12" />
           </svg>
         </button>
       </div>

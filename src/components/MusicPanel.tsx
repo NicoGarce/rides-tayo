@@ -869,13 +869,6 @@ export default function MusicPanel({ roomId, riderId, riderName, open, onClose }
               <span className="text-[11px] text-[var(--muted)] w-9 text-right shrink-0">
                 {volume}%
               </span>
-              <button
-                onClick={handleStop}
-                disabled={!musicState}
-                className="shrink-0 text-[11px] text-[var(--muted)] border border-[var(--border)] rounded-lg px-2.5 py-1.5 disabled:opacity-40 active:bg-[var(--border)] transition-colors"
-              >
-                Stop
-              </button>
             </div>
 
             <div className="flex items-center gap-3 mt-2">
@@ -913,6 +906,16 @@ export default function MusicPanel({ roomId, riderId, riderName, open, onClose }
                 <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="5 4 15 12 5 20 5 4" fill="currentColor" />
                   <line x1="19" y1="5" x2="19" y2="19" />
+                </svg>
+              </button>
+              <button
+                onClick={handleStop}
+                disabled={!musicState}
+                className="w-12 h-12 shrink-0 rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--foreground)] flex items-center justify-center disabled:opacity-40 active:bg-[var(--border)] transition-colors"
+                aria-label="Stop music"
+              >
+                <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
+                  <rect x="6" y="6" width="12" height="12" rx="2" />
                 </svg>
               </button>
               <button
