@@ -181,7 +181,6 @@ export default function MusicPanel({ roomId, riderId, riderName, open, onClose }
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [playerReady, setPlayerReady] = useState(false);
-  const [playerState, setPlayerState] = useState(-1);
   const [localMuted, setLocalMuted] = useState(false);
   const [clockSec, setClockSec] = useState(0);
   /* per-user local volume (0–100), persisted per rider on this device */
@@ -200,6 +199,12 @@ export default function MusicPanel({ roomId, riderId, riderName, open, onClose }
   const playerStateRef = useRef<number>(-1);
   const lastPubRef = useRef<number | null>(null); /* updatedAt of our own writes */
   const pendingSeekRef = useRef<number | null>(null);
+  /* the player is one persistent iframe, parked offscreen permanently
+     (audio-only UI).  Never re-inserted into the DOM — moving an iframe
+     reloads it and restarts playback.  Sized 640x360 so YouTube serves
+     a stream tier with proper audio bitrate (tiny players get
+     low-bitrate audio). */
+  const mountRef = useRef<HTMLDivElement>(null);
 
   /* keep latest state/queue reachable from player event handlers */
   const stateRef = useRef<MusicState | null>(null);
@@ -280,8 +285,8 @@ export default function MusicPanel({ roomId, riderId, riderName, open, onClose }
         const mount = document.getElementById("music-yt-mount");
         if (!mount) return;
         player = new YT.Player(mount, {
-          width: "200",
-          height: "112",
+          width: "640",
+          height: "360",
           playerVars: {
             playsinline: 1,
             controls: 0,
@@ -294,14 +299,10 @@ export default function MusicPanel({ roomId, riderId, riderName, open, onClose }
             onReady: () => {
               playerRef.current = player;
               setPlayerReady(true);
-              if (player) {
-                playerStateRef.current = player.getPlayerState();
-                setPlayerState(playerStateRef.current);
-              }
+              if (player) playerStateRef.current = player.getPlayerState();
             },
             onStateChange: (event: { data: number }) => {
               playerStateRef.current = event.data;
-              setPlayerState(event.data);
               /* YT.PlayerState: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering */
               if (event.data === 0 && controllerRef.current) {
                 advanceRef.current();
@@ -600,34 +601,6 @@ export default function MusicPanel({ roomId, riderId, riderName, open, onClose }
     }
   }
 
-  /* the controller's player is paused while the room expects playback
-     (autoplay blocked by the browser) — offer a one-tap nudge */
-  const needsJoinTap =
-    playerReady &&
-    !!musicState?.isPlaying &&
-    (playerState === -1 || playerState === 2);
-
-  /* resume playback after an autoplay block.  A direct playVideo() from
-     the tap usually works; if the browser still refuses, start muted
-     (always allowed) and let the rider unmute with the volume control. */
-  function handleJoinPlayback() {
-    const p = playerRef.current;
-    if (!p) return;
-    p.playVideo();
-    window.setTimeout(() => {
-      const st = p.getPlayerState?.() ?? -1;
-      if (st !== 1 && st !== 3) {
-        try {
-          p.mute();
-        } catch {
-          /* ignore */
-        }
-        p.playVideo();
-        setLocalMuted(true);
-      }
-    }, 400);
-  }
-
   const isPlaylistTrack = musicState?.kind === "playlist";
 
   return (
@@ -643,22 +616,25 @@ export default function MusicPanel({ roomId, riderId, riderName, open, onClose }
         }
       `}</style>
 
-      {/* hidden player: parked offscreen permanently so the app is
-          audio-only; playback is started via the join-tap button */}
+      {/* hidden player: parked offscreen permanently (audio-only UI).
+          Sized 640x360 so YouTube serves a stream tier with proper
+          audio bitrate. */}
       <div
         aria-hidden
         style={{
           position: "fixed",
           left: -9999,
           bottom: 0,
-          width: 200,
-          height: 112,
+          width: 640,
+          height: 360,
           overflow: "hidden",
           opacity: 0,
           pointerEvents: "none",
         }}
       >
-        <div id="music-yt-mount" />
+        <div ref={mountRef} style={{ width: "100%", height: "100%", overflow: "hidden" }}>
+          <div id="music-yt-mount" />
+        </div>
       </div>
 
       {open ? (
@@ -784,15 +760,6 @@ export default function MusicPanel({ roomId, riderId, riderName, open, onClose }
           <div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
             {musicState ? (
               <>
-                {needsJoinTap && (
-                  <button
-                    onClick={handleJoinPlayback}
-                    className="w-full mt-3 py-2 rounded-lg text-xs font-medium bg-yellow-900/40 border border-yellow-700 text-yellow-200 active:opacity-80 transition-opacity"
-                  >
-                    Tap to join playback (browser blocked autoplay)
-                  </button>
-                )}
-
                 <p className="text-[11px] text-[var(--muted)] mt-2 px-1 truncate">
                   {isPlaylistTrack ? "Playlist · " : ""}
                   {formatTime(clockSec)}
