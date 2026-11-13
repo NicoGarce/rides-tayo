@@ -711,21 +711,6 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
           </button>
         </div>
 
-        {/* share */}
-        <button
-          onClick={() => setShowShare(true)}
-          className="touch-target w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)] transition-colors shrink-0"
-          aria-label="Share ride"
-        >
-          <svg viewBox="0 0 24 24" className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="18" cy="5" r="3" />
-            <circle cx="6" cy="12" r="3" />
-            <circle cx="18" cy="19" r="3" />
-            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
-            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
-          </svg>
-        </button>
-
         {/* deafen toggle */}
         <button
           onClick={toggleDeafen}
@@ -740,6 +725,21 @@ function RidePageContent({ roomId, user }: { roomId: string; user: AppUser }) {
           <svg viewBox="0 0 24 24" className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 14v5a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1H4a3 3 0 0 1 0-6 7 7 0 0 1 14 0 3 3 0 0 1 0 6h-2a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-5" />
             {isDeafened && <line x1="3" y1="3" x2="21" y2="21" />}
+          </svg>
+        </button>
+
+        {/* share */}
+        <button
+          onClick={() => setShowShare(true)}
+          className="touch-target w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)] transition-colors shrink-0"
+          aria-label="Share ride"
+        >
+          <svg viewBox="0 0 24 24" className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="18" cy="5" r="3" />
+            <circle cx="6" cy="12" r="3" />
+            <circle cx="18" cy="19" r="3" />
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
           </svg>
         </button>
 
