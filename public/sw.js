@@ -7,7 +7,10 @@
      untouched, handled by the browser/network directly */
 
 const CACHE = "rides-tayo-v3";
+const TILE_CACHE = "rides-tayo-tiles-v1";
 const SHELL = ["/"];
+const TILE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; /* keep tiles a week */
+const TILE_MAX_ENTRIES = 600;
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -24,7 +27,7 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-/* requests the SW must not intercept */
+/* requests the SW must not intercept (map tiles get their own strategy) */
 function shouldPassThrough(url) {
   return (
     url.origin !== self.location.origin ||
@@ -34,6 +37,33 @@ function shouldPassThrough(url) {
     ) ||
     url.pathname.includes("hmr")
   );
+}
+
+/* map tiles: cache-first with a week's TTL and an entry cap — revisited
+   routes cost no tile data */
+function isTileRequest(url) {
+  return /(^|\.)tile\.openstreetmap\.org$/.test(url.hostname);
+}
+
+async function tileHandler(req) {
+  const cache = await caches.open(TILE_CACHE);
+  const cached = await cache.match(req);
+  if (cached) {
+    const date = cached.headers.get("date");
+    if (date && Date.now() - new Date(date).getTime() < TILE_MAX_AGE) return cached;
+    await cache.delete(req);
+  }
+  const res = await fetch(req);
+  if (res.ok) {
+    await cache.put(req, res.clone());
+    const keys = await cache.keys();
+    if (keys.length > TILE_MAX_ENTRIES) {
+      for (const old of keys.slice(0, keys.length - TILE_MAX_ENTRIES)) {
+        await cache.delete(old);
+      }
+    }
+  }
+  return res;
 }
 
 self.addEventListener("fetch", (event) => {
@@ -47,6 +77,12 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   if (shouldPassThrough(url)) return;
+
+  /* map tiles (cross-origin but cached by us) */
+  if (isTileRequest(url)) {
+    event.respondWith(tileHandler(req));
+    return;
+  }
 
   /* page navigations */
   if (req.mode === "navigate") {

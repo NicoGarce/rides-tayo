@@ -256,6 +256,48 @@ export function usePeerConnection({
     isDestroyedRef.current = false;
     initialSetupDoneRef.current = false;
 
+    /* once per page load: inject Opus encoder limits into every SDP
+       negotiation (offer + answer) so voice costs far less data with no
+       audible change for speech:
+       - maxaveragebitrate=32000 caps speech at 32 kbps (transparent)
+       - usedtx=1 enables discontinuous transmission: during silence the
+         encoder sends ~1 packet/s instead of a full stream (50-70% of
+         intercom traffic is silence) */
+    const w = window as typeof window & { __roamOpusPatched?: boolean };
+    if (!w.__roamOpusPatched) {
+      w.__roamOpusPatched = true;
+      const OPUS_PARAMS = "maxaveragebitrate=32000;usedtx=1";
+      const munge = (sdp: string) => {
+        const m = sdp.match(/a=rtpmap:(\d+) opus\/\d+/);
+        if (!m) return sdp;
+        const pt = m[1];
+        if (sdp.includes(`a=fmtp:${pt} `)) {
+          return sdp.replace(
+            new RegExp(`a=fmtp:${pt} ([^\\r\\n]*)`),
+            (line, params) => (params.includes("usedtx") ? line : `a=fmtp:${pt} ${params};${OPUS_PARAMS}`)
+          );
+        }
+        return sdp.replace(
+          new RegExp(`(a=rtpmap:${pt} opus/[^\\r\\n]*\\r?\\n)`),
+          `$1a=fmtp:${pt} ${OPUS_PARAMS}\r\n`
+        );
+      };
+      /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+      const pcProto = RTCPeerConnection.prototype as unknown as Record<string, any>;
+      const wrap = (prop: string) => {
+        const orig = pcProto[prop];
+        pcProto[prop] = function (this: RTCPeerConnection, desc?: { type?: string; sdp?: string }) {
+          if (desc && desc.sdp && (desc.type === "offer" || desc.type === "answer")) {
+            desc = { type: desc.type, sdp: munge(desc.sdp) };
+          }
+          return orig.call(this, desc);
+        };
+      };
+      wrap("setLocalDescription");
+      wrap("setRemoteDescription");
+    }
+
+
     async function init() {
       /* --- mic access --- */
       let stream: MediaStream;
